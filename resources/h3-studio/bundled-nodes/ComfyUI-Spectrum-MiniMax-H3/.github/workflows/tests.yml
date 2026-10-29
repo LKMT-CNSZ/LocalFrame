@@ -1,0 +1,236 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-native-fixture:
+    strategy:
+      fail-fast: false
+      matrix:
+        comfy_ref:
+          - e377e263049f9338b4d12a3dd417b36ae62948ff
+          - 0dd9b154a1654fc699dcdc3af066c7cce096045a
+          - 5599a05fea715cb2aff11f30f5b06e16d0dfa0c4
+          - 27bca654eb9a70237d93f56a6ea336ab55f8925d
+          - ff6c8a8af144fc9e9e7bc436b1b202f9316848d8
+        python_version:
+          - "3.12"
+        include:
+          - comfy_ref: 27bca654eb9a70237d93f56a6ea336ab55f8925d
+            python_version: "3.13"
+          - comfy_ref: 2504e68d4d9dedb514e172692f13436623f25aed
+            python_version: "3.12"
+            comfy_kitchen_version: "0.2.31"
+            comfy_aimdo_version: "0.4.15"
+          - comfy_ref: 8a33128f2f8c5585c57486c07de481241e70a39c
+            python_version: "3.12"
+            comfy_kitchen_version: "0.2.31"
+            comfy_aimdo_version: "0.4.15"
+          - comfy_ref: 15eb748b3ec5f8a0a2d470b7fb280e2d7579f916
+            python_version: "3.12"
+            comfy_kitchen_version: "0.2.33"
+            comfy_aimdo_version: "0.5.2"
+          - comfy_ref: be92396834f9b6e3e361cfe30e7eed693137a448
+            python_version: "3.12"
+            comfy_kitchen_version: "0.2.33"
+            comfy_aimdo_version: "0.5.3"
+            fixture_required: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out custom node
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out reviewed ComfyUI source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: comfyanonymous/ComfyUI
+          ref: ${{ matrix.comfy_ref }}
+          path: ComfyUI
+
+      - name: Check out reviewed RefDelta interop
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: xmarre/ComfyUI-MiniMax-H3-RefDelta-Solver
+          ref: 21d0191d933fedf2885df082d33eb1bc2fffd529
+          path: RefDeltaSolver
+
+      - name: Check out reviewed Untwist interop
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: xmarre/ComfyUI-Untwisting-RoPE
+          ref: 63c8d8df5e08dfdad4b397480d966b90f9b5a6c6
+          path: UntwistRoPE
+
+      - name: Check out reviewed Flow interop
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: xmarre/MiniMax-H3-Flow-Aligned-Regenerate
+          ref: 860f308cc4f84f920d0c1facd4ece028584a02a0
+          path: FlowRegenerate
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python_version }}
+          cache: pip
+
+      - name: Install test dependencies
+        env:
+          COMFY_KITCHEN_VERSION: ${{ matrix.comfy_kitchen_version || '0.2.26' }}
+          COMFY_AIMDO_VERSION: ${{ matrix.comfy_aimdo_version || '0.4.13' }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install \
+            pytest ruff numpy scipy torchsde psutil safetensors einops tqdm pyyaml pillow packaging \
+            transformers tokenizers sentencepiece aiohttp yarl alembic SQLAlchemy filelock \
+            "av>=17.0.0" requests simpleeval blake3 kornia spandrel pydantic pydantic-settings \
+            PyOpenGL comfy-angle \
+            "comfy-kitchen==${COMFY_KITCHEN_VERSION}" "comfy-aimdo==${COMFY_AIMDO_VERSION}"
+          python -m pip wheel --no-deps --wheel-dir /tmp/spectrum-h3-wheel .
+
+      - name: Run forecaster smoke test
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python tests/smoke_forecaster.py
+
+      - name: Run Ruff and compileall
+        run: |
+          python -m ruff check \
+            comfyui_spectrum_h3/external_patch_compat.py \
+            comfyui_spectrum_h3/external_patch_hardening.py \
+            tests/test_external_patch_compat.py \
+            tests/test_external_patch_hardening.py \
+            tests/test_external_patch_transaction_parity.py \
+            --ignore I001,UP037
+          python -m ruff check \
+            comfyui_spectrum_h3/backend_history.py \
+            comfyui_spectrum_h3/bsa_transition_probe.py \
+            comfyui_spectrum_h3/bsa_transition_probe_compat.py \
+            comfyui_spectrum_h3/bsa_transition_probe_manual.py \
+            comfyui_spectrum_h3/core_bsa_compat.py \
+            comfyui_spectrum_h3/core_bsa_diagnostics.py \
+            comfyui_spectrum_h3/core_bsa_flow_compat.py \
+            comfyui_spectrum_h3/core_bsa_forecast_recovery.py \
+            comfyui_spectrum_h3/core_bsa_preprocess_compat.py \
+            comfyui_spectrum_h3/source_code_audit.py \
+            comfyui_spectrum_h3/comfy_compiler_compat.py \
+            comfyui_spectrum_h3/config.py \
+            comfyui_spectrum_h3/generic_correction.py \
+            comfyui_spectrum_h3/generic_correction_calibration.py \
+            comfyui_spectrum_h3/generic_correction_controller.py \
+            comfyui_spectrum_h3/generic_correction_core.py \
+            comfyui_spectrum_h3/generic_correction_evaluator.py \
+            comfyui_spectrum_h3/generic_correction_research.py \
+            comfyui_spectrum_h3/generic_correction_runtime.py \
+            comfyui_spectrum_h3/generic_correction_topology.py \
+            comfyui_spectrum_h3/experiments.py \
+            comfyui_spectrum_h3/er_sde_ksampler_contract.py \
+            comfyui_spectrum_h3/er_sde_stochastic.py \
+            comfyui_spectrum_h3/refdelta_interop.py \
+            comfyui_spectrum_h3/minimax_h3.py \
+            comfyui_spectrum_h3/objective_media.py \
+            comfyui_spectrum_h3/objective_media_bounded.py \
+            comfyui_spectrum_h3/objective_media_nodes.py \
+            comfyui_spectrum_h3/nodes.py \
+            comfyui_spectrum_h3/postrun_safety.py \
+            comfyui_spectrum_h3/runtime.py \
+            comfyui_spectrum_h3/sampling.py \
+            comfyui_spectrum_h3/__init__.py \
+            tests/test_backend_history.py \
+            tests/test_bsa_transition_probe.py \
+            tests/test_bsa_transition_probe_activation.py \
+            tests/test_bsa_transition_probe_kitchen_compat.py \
+            tests/test_bsa_transition_probe_manual.py \
+            tests/test_core_bsa_compat.py \
+            tests/test_core_bsa_flow_compat.py \
+            tests/test_core_bsa_flow_identity.py \
+            tests/test_core_bsa_forecast_recovery.py \
+            tests/test_core_bsa_preprocess_compat.py \
+            tests/test_core_bsa_source_hardening.py \
+            tests/test_reviewed_bsa_fixture_gate.py \
+            tests/test_scheduler_bootstrap_entitlement.py \
+            tests/test_comfy_compiler_compat.py \
+            tests/test_config.py \
+            tests/test_continuum_interop.py \
+            tests/test_er_sde_solver_dense_output.py \
+            tests/test_er_sde_stochastic_compensation.py \
+            tests/test_sa_solver_state_conditioning.py \
+            tests/test_seeds_deterministic_contract.py \
+            tests/test_generic_correction.py \
+            tests/test_generic_correction_calibration.py \
+            tests/test_generic_correction_core.py \
+            tests/test_generic_correction_evaluator.py \
+            tests/test_generic_correction_research.py \
+            tests/test_generic_correction_research_regional_summary.py \
+            tests/test_h3_masked_forecast.py \
+            tests/test_h3_masked_native_equivalence.py \
+            tests/test_h3_masked_native_wrapper.py \
+            tests/test_model_aware.py \
+            tests/test_objective_media.py \
+            tests/test_objective_media_bounded.py \
+            tests/test_objective_media_seed_link.py \
+            tests/test_objective_media_sequential.py \
+            tests/test_postrun_safety.py \
+            tests/test_refdelta_interop.py \
+            tests/test_runtime.py \
+            tests/test_sampler_contract.py \
+            tests/test_sampling.py \
+            tests/test_tiled_diffusion_ksampler_contract.py \
+            tests/conftest.py \
+            tools/analyze_generic_correction.py \
+            --ignore N999,I001,C408,UP035
+          python -m compileall -q comfyui_spectrum_h3 tests tools
+
+      - name: Run focused external compatibility suites
+        env:
+          COMFYUI_PATH: ${{ github.workspace }}/ComfyUI
+          PYTHONPATH: ${{ github.workspace }}/ComfyUI:${{ github.workspace }}/RefDeltaSolver:${{ github.workspace }}/UntwistRoPE:${{ github.workspace }}/FlowRegenerate
+        run: |
+          python -m pytest -q \
+            tests/test_external_patch_compat.py \
+            tests/test_external_patch_hardening.py \
+            tests/test_external_patch_transaction_parity.py \
+            tests/test_h3_wrapper.py \
+            tests/test_h3_masked_forecast.py \
+            tests/test_h3_masked_native_equivalence.py \
+            tests/test_h3_masked_native_wrapper.py \
+            tests/test_runtime.py \
+            tests/test_sampling.py \
+            tests/test_model_aware.py \
+            tests/test_native_equivalence.py \
+            tests/test_er_sde_stochastic_compensation.py \
+            tests/test_sa_solver_state_conditioning.py
+
+      - name: Run tests against native MiniMax H3
+        env:
+          COMFYUI_PATH: ${{ github.workspace }}/ComfyUI
+          PYTHONPATH: ${{ github.workspace }}/ComfyUI:${{ github.workspace }}/RefDeltaSolver:${{ github.workspace }}/UntwistRoPE:${{ github.workspace }}/FlowRegenerate
+          SPECTRUM_REQUIRE_REVIEWED_BSA_FIXTURE: ${{ matrix.fixture_required && '1' || '0' }}
+        run: |
+          python -m pytest -q \
+            --ignore=tests/test_external_patch_compat.py \
+            --ignore=tests/test_external_patch_hardening.py \
+            --ignore=tests/test_external_patch_transaction_parity.py \
+            --ignore=tests/test_h3_wrapper.py \
+            --ignore=tests/test_h3_masked_forecast.py \
+            --ignore=tests/test_h3_masked_native_equivalence.py \
+            --ignore=tests/test_h3_masked_native_wrapper.py \
+            --ignore=tests/test_runtime.py \
+            --ignore=tests/test_sampling.py \
+            --ignore=tests/test_model_aware.py \
+            --ignore=tests/test_native_equivalence.py \
+            --ignore=tests/test_er_sde_stochastic_compensation.py \
+            --ignore=tests/test_sa_solver_state_conditioning.py

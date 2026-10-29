@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'">
+  <title>本地图片生成</title>
+  <link rel="stylesheet" href="/white-model.css">
+  <link rel="stylesheet" href="/local-image.css">
+</head>
+<body>
+<main class="studio image-studio">
+  <aside class="settings image-settings">
+    <span class="eyebrow">LOCAL IMAGE STUDIO</span>
+    <h1>本地图片生成</h1>
+    <p class="muted">选择模型，描述想要的画面。作品会保存在本机，右侧可查看生成进度与历史图片。</p>
+    <label>生成方式<select id="engine"><option value="local">本机 SD/SDXL</option><option value="qwen-image-2.1">本机 Qwen Image 2.1</option><option value="api">第三方生图 API</option></select></label>
+    <div id="localFields"><label>图片模型<select id="model"></select></label><button id="refresh" type="button">刷新模型列表</button><p id="modelStatus" class="hint"></p></div>
+    <div id="qwenFields" hidden><label>Qwen Image 2.1 量化版本<select id="variant"></select></label><button id="downloadModel" type="button">下载所选版本</button><p id="qwenStatus" class="hint"></p><div id="modelDownloadProgress" class="model-download-progress" role="status" hidden><div><strong id="modelDownloadTitle">正在下载模型</strong><span id="modelDownloadPercent">等待文件大小</span></div><progress id="modelDownloadBar" max="100"></progress><p id="modelDownloadDetails">正在连接下载源…</p></div></div>
+    <div id="apiFields" hidden><label>API 地址<input id="apiBaseUrl" type="url" placeholder="https://服务商地址/v1"></label><label>模型 ID<input id="apiModel" type="text" placeholder="服务商提供的图像模型 ID"></label><label>API Key<input id="apiKey" type="password" autocomplete="off" placeholder="仅用于本次页面请求"></label><label class="consent"><input id="apiConfirmed" type="checkbox">我确认将提示词发送给该服务商，且可能产生费用</label><p class="hint">兼容 POST /v1/images/generations，需直接返回 PNG Base64。不会自动重试；关闭页面后密钥清空。</p></div>
+    <label>提示词<textarea id="prompt" rows="6" maxlength="2000" placeholder="描述画面主体、场景、光照和风格"></textarea></label>
+    <label>反向提示词<textarea id="negative" rows="3" maxlength="1000" placeholder="不希望出现的内容"></textarea></label>
+    <div class="prompt-actions"><button id="clearPrompts" type="button">一键清空提示词</button><span id="promptClearStatus" role="status">同时清空提示词和反向提示词</span></div>
+    <div class="field-row"><label>尺寸<select id="size"><option value="768x768">768 × 768</option><option value="1024x1024">1024 × 1024</option><option value="768x1024">768 × 1024</option><option value="1024x768">1024 × 768</option><option value="512x512">512 × 512</option></select></label><label id="stepsField">采样步数<input id="steps" type="number" min="4" max="40" value="20"></label></div>
+    <button id="generate" class="primary" disabled>生成图片</button>
+    <p class="hint">本机生成会等待正在运行的视频任务完成。Qwen Image 2.1 还需要 ComfyUI-GGUF 节点、Qwen3VL 8B 文本编码器和 VAE；Q6_K 本体约 6.27 GB，不包含这些组件。</p>
+  </aside>
+
+  <section class="stage image-stage" aria-label="图片预览与作品">
+    <header class="stage-heading"><div><span class="eyebrow">CANVAS</span><h2>创作画布</h2></div><span id="stageBadge" class="stage-badge">等待创作</span></header>
+    <div class="preview-surface">
+      <div id="emptyState" class="empty-state"><div class="empty-mark" aria-hidden="true"><span></span></div><strong>下一张作品，从这里开始</strong><p>左侧填写提示词并开始生成。采样进度与成品会显示在这里。</p></div>
+      <div id="progressState" class="progress-state" hidden><div class="progress-orbit" aria-hidden="true"></div><span class="eyebrow">GENERATING</span><h3 id="progressTitle">正在准备生成</h3><p id="progressDetail">正在连接本机生成环境…</p><progress id="generationProgress" max="100"></progress><div class="progress-meta"><span id="progressCount">等待采样数据</span><span id="progressElapsed">已用 0 秒</span></div></div>
+      <section id="result" class="result-view" hidden><button id="openImageViewer" class="result-image-button" type="button" aria-label="放大浏览当前图片"><img id="resultImage" alt="生成的图片"><span>点击图片放大</span></button><div class="result-toolbar"><div><strong>作品预览</strong><p id="resultInfo"></p></div><div class="result-actions"><button id="backToProgress" type="button" hidden>返回生成进度</button><a id="download" download="LocalFrame-image.png">下载 PNG</a></div></div></section>
+    </div>
+    <div id="activeProgress" class="active-progress" role="status" hidden><span id="activeProgressText">正在生成图片</span><progress id="activeProgressBar" max="100"></progress><button id="showProgress" type="button" hidden>查看生成进度</button></div>
+    <div id="status" class="stage-status" role="status">正在检查本机图片模型…</div>
+
+    <section class="image-library" aria-labelledby="libraryTitle"><header class="library-heading"><div><span class="eyebrow">LIBRARY</span><h2 id="libraryTitle">图片作品</h2><p>作品默认收起；需要时手动打开。生成期间也可以浏览。</p></div><div class="library-actions"><button id="toggleLibrary" type="button" aria-expanded="false">查看过往图片</button><button id="toggleGroups" type="button" hidden>全部折叠</button><button id="refreshWorks" type="button" hidden>刷新</button></div></header><div id="libraryContent" hidden><div id="worksEmpty" class="works-empty">还没有图片作品。生成后的图片会自动出现在这里。</div><div id="worksList" class="works-list"></div></div></section>
+  </section>
+</main>
+<dialog class="delete-dialog" id="deleteImageDialog" aria-labelledby="deleteImageTitle">
+  <h2 id="deleteImageTitle">删除图片作品？</h2>
+  <p>将从本机作品目录永久删除这张图片，删除后无法恢复。</p>
+  <div class="delete-dialog-actions"><button type="button" id="cancelImageDelete">取消</button><button type="button" class="confirm-delete" id="confirmImageDelete">确定删除</button></div>
+</dialog>
+<dialog class="image-viewer" id="imageViewer" aria-label="图片浏览">
+  <div class="viewer-toolbar"><span id="viewerInfo">图片浏览</span><span class="viewer-hint">滚轮缩放 · 左键拖动</span><div><button id="zoomOut" type="button" aria-label="缩小图片">−</button><span id="zoomValue">适应窗口</span><button id="zoomIn" type="button" aria-label="放大图片">＋</button><button id="zoomFit" type="button">适应窗口</button><button id="closeImageViewer" type="button">关闭</button></div></div>
+  <div id="viewerCanvas" class="viewer-canvas"><img id="viewerImage" alt="放大浏览的图片"></div>
+</dialog>
+<script src="/last-settings.js"></script><script src="/local-image.js"></script>
+</body>
+</html>

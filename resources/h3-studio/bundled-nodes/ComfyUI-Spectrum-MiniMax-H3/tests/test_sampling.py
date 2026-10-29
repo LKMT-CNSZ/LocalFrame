@@ -1,0 +1,1607 @@
+from __future__ import annotations
+
+import sys
+from types import ModuleType, SimpleNamespace
+
+import pytest
+import torch
+
+from comfyui_spectrum_h3 import runtime as runtime_module
+from comfyui_spectrum_h3 import sampling as sampling_module
+from comfyui_spectrum_h3.config import SpectrumH3Config
+from comfyui_spectrum_h3.runtime import OfflineReplayAbort, SpectrumH3Runtime
+from comfyui_spectrum_h3.sampling import (
+    BINDING_KEY,
+    SpectrumH3Binding,
+    install_sampler_wrappers,
+    max_consecutive_forecasts,
+    min_actual_steps_after_forecast,
+    outer_sample_wrapper,
+    predict_noise_wrapper,
+    sampler_is_supported,
+    sampler_name,
+    sampler_sample_wrapper,
+    sampler_supports_seeded_replay,
+    _seeds_expected_model_calls,
+    _seeds_is_stochastic,
+    _seeds_option_contract,
+    _seeds_stage_schedule_reason,
+)
+
+
+def _sampler(function_name: str) -> SimpleNamespace:
+    def sampler_function():
+        pass
+
+    sampler_function.__name__ = function_name
+    return SimpleNamespace(sampler_function=sampler_function)
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "_turbo_sampler",
+        "sample_euler",
+        "sample_er_sde",
+        "sample_refdelta_er_sde",
+        "sample_res_multistep",
+        "sample_res_multistep_cfg_pp",
+        "sample_seeds_2",
+        "sample_seeds_3",
+        "sample_refdelta_seeds_2",
+        "sample_refdelta_seeds_3",
+        "sample_sa_solver",
+        "sample_sa_solver_pece",
+        "sample_refdelta_sa_solver",
+        "sample_refdelta_sa_solver_pece",
+    ),
+)
+def test_reviewed_samplers_are_supported(function_name):
+    sampler = _sampler(function_name)
+
+    assert sampler_name(sampler) == function_name
+    assert sampler_is_supported(sampler)
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "sample_euler_ancestral",
+        "sample_res_multistep_ancestral",
+        "sample_res_multistep_ancestral_cfg_pp",
+        "res_multistep",
+        "sample_res_multistep_experimental",
+        "sample_heun",
+        "_turbo_sampler_ancestral",
+    ),
+)
+def test_unreviewed_sampler_names_do_not_match_by_prefix(function_name):
+    assert not sampler_is_supported(_sampler(function_name))
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "_turbo_sampler",
+        "sample_euler",
+        "sample_er_sde",
+        "sample_refdelta_er_sde",
+        "sample_res_multistep",
+        "sample_res_multistep_cfg_pp",
+        "sample_seeds_2",
+        "sample_seeds_3",
+        "sample_refdelta_seeds_2",
+        "sample_refdelta_seeds_3",
+    ),
+)
+def test_supported_h3_samplers_limit_forecast_streaks(function_name):
+    assert max_consecutive_forecasts(_sampler(function_name)) == 1
+
+
+@pytest.mark.parametrize("function_name", ("sample_res_multistep", "sample_res_multistep_cfg_pp"))
+def test_res_multistep_policy_keeps_one_refresh_without_hidden_tail_floor(function_name):
+    sampler = _sampler(function_name)
+
+    assert min_actual_steps_after_forecast(sampler) == 1
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "sample_euler",
+        "sample_er_sde",
+        "sample_refdelta_er_sde",
+        "_turbo_sampler",
+        "sample_seeds_2",
+        "sample_seeds_3",
+        "sample_refdelta_seeds_2",
+        "sample_refdelta_seeds_3",
+    ),
+)
+def test_non_res_policy_keeps_one_refresh(function_name):
+    sampler = _sampler(function_name)
+
+    assert min_actual_steps_after_forecast(sampler) == 1
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "sample_sa_solver",
+        "sample_sa_solver_pece",
+        "sample_refdelta_sa_solver",
+        "sample_refdelta_sa_solver_pece",
+    ),
+)
+def test_sa_policy_separates_stochastic_tail_burst_from_deterministic_refresh(function_name):
+    sampler = _sampler(function_name)
+    sampler.extra_options = {}
+
+    assert max_consecutive_forecasts(sampler) == 1
+    assert min_actual_steps_after_forecast(sampler) == 0
+
+    sampler.extra_options = {"s_noise": 0.0}
+    assert max_consecutive_forecasts(sampler) == 1
+    assert min_actual_steps_after_forecast(sampler) == (
+        0
+        if function_name in {
+            "sample_sa_solver_pece",
+            "sample_refdelta_sa_solver_pece",
+        }
+        else 4
+    )
+
+    sampler.extra_options = {
+        "s_noise": 0.0,
+        "predictor_order": 2,
+        "corrector_order": 0,
+    }
+    assert min_actual_steps_after_forecast(sampler) == 2
+
+    if function_name == "sample_sa_solver":
+        sampler.extra_options = {
+            "s_noise": 0.0,
+            "use_pece": True,
+            "corrector_order": 4,
+        }
+        assert min_actual_steps_after_forecast(sampler) == 0
+
+
+@pytest.mark.parametrize(
+    ("function_name", "active_pece", "expected_calls", "expected_topology"),
+    (
+        (
+            "sample_refdelta_sa_solver",
+            False,
+            3,
+            [
+                (0, 0, "predicted"),
+                (1, 0, "predicted"),
+                (2, 0, "predicted"),
+            ],
+        ),
+        (
+            "sample_refdelta_sa_solver_pece",
+            True,
+            5,
+            [
+                (0, 0, "predicted"),
+                (1, 0, "predicted"),
+                (1, 1, "corrected"),
+                (2, 0, "predicted"),
+                (2, 1, "corrected"),
+            ],
+        ),
+    ),
+)
+def test_refdelta_sa_backends_keep_distinct_pec_and_pece_topologies(
+    function_name,
+    active_pece,
+    expected_calls,
+    expected_topology,
+):
+    sampler = _sampler(function_name)
+    sampler.extra_options = {"corrector_order": 4}
+
+    assert sampling_module._sa_solver_is_active_pece(sampler) is active_pece
+    assert sampling_module._sa_solver_expected_model_calls(
+        sampler,
+        torch.tensor([0.9, 0.7, 0.5, 0.0]),
+    ) == expected_calls
+    topology = sampling_module._sa_solver_call_topology(
+        sampler,
+        torch.tensor([0.9, 0.7, 0.5, 0.0]),
+    )
+    assert topology is not None
+    assert [
+        (entry.outer_step, entry.stage_index, entry.phase) for entry in topology
+    ] == expected_topology
+
+
+def test_unsupported_sampler_has_no_forecast_streak_policy():
+    sampler = _sampler("sample_euler_ancestral")
+
+    assert max_consecutive_forecasts(sampler) is None
+    assert min_actual_steps_after_forecast(sampler) == 0
+
+
+
+
+
+@pytest.mark.parametrize(
+    ("function_name", "sigmas", "expected"),
+    (
+        ("sample_seeds_2", [1.0, 0.6, 0.2, 0.0], 5),
+        ("sample_seeds_3", [1.0, 0.6, 0.2, 0.0], 7),
+        ("sample_seeds_2", [1.0, 0.6, 0.2], 4),
+        ("sample_seeds_3", [1.0, 0.6, 0.2], 6),
+        ("sample_refdelta_seeds_2", [1.0, 0.6, 0.2, 0.0], 5),
+        ("sample_refdelta_seeds_3", [1.0, 0.6, 0.2, 0.0], 7),
+        ("sample_refdelta_seeds_2", [1.0, 0.6, 0.2], 4),
+        ("sample_refdelta_seeds_3", [1.0, 0.6, 0.2], 6),
+    ),
+)
+def test_seeds_expected_model_calls_tracks_internal_stages(
+    function_name, sigmas, expected
+):
+    assert (
+        _seeds_expected_model_calls(_sampler(function_name), torch.tensor(sigmas))
+        == expected
+    )
+
+
+class _FakeSASampling:
+    noise_scale = 1.0
+
+    @staticmethod
+    def percent_to_sigma(percent):
+        return {0.2: 0.8, 0.8: 0.2}[percent]
+
+
+def test_sa_stochastic_protection_matches_native_tau_input_without_history_preroll():
+    sampler = _sampler("sample_sa_solver")
+    sampler.extra_options = {}
+    sigmas = torch.tensor([1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0])
+
+    forced, stochastic, reason = sampling_module._sa_solver_stochastic_protection(
+        sampler,
+        sigmas,
+        _FakeSASampling(),
+    )
+
+    assert reason is None
+    assert stochastic == (3, 4, 5, 6, 7, 8)
+    # Stochastic inputs remain observable, but the solver-aware adapter now
+    # handles them by isolating forecasted denoisers from persistent Adams
+    # history instead of blanket-forcing the whole interval actual.
+    assert forced == ()
+
+
+def test_sa_stochastic_protection_respects_zero_noise_and_zero_eta():
+    sigmas = torch.tensor([1.0, 0.8, 0.6, 0.4, 0.2, 0.0])
+
+    sampler = _sampler("sample_sa_solver")
+    sampler.extra_options = {"s_noise": 0.0}
+    forced, stochastic, reason = sampling_module._sa_solver_stochastic_protection(
+        sampler,
+        sigmas,
+        _FakeSASampling(),
+    )
+    assert reason is None
+    assert forced == ()
+    assert stochastic == ()
+
+    class ZeroEtaSampling(_FakeSASampling):
+        pass
+
+    native_sa_solver = pytest.importorskip(
+        "comfy.k_diffusion.sa_solver",
+        reason="native SA tau provenance requires an installed ComfyUI",
+    )
+
+    sampler.extra_options = {
+        "tau_func": native_sa_solver.get_tau_interval_func(0.8, 0.2, eta=0.0),
+    }
+    forced, stochastic, reason = sampling_module._sa_solver_stochastic_protection(
+        sampler,
+        sigmas,
+        ZeroEtaSampling(),
+    )
+    assert reason is None
+    assert forced == ()
+    assert stochastic == ()
+
+
+@pytest.mark.parametrize(
+    ("options", "stochastic"),
+    (
+        ({}, True),
+        ({"eta": 1.0, "s_noise": 1.0}, True),
+        ({"eta": 0.0}, False),
+        ({"s_noise": 0.0}, False),
+        ({"eta": -0.5, "s_noise": 1.0}, False),
+    ),
+)
+def test_seeds_stochastic_gate_matches_native_inject_noise_condition(options, stochastic):
+    sampler = _sampler("sample_seeds_2")
+    sampler.extra_options = options
+
+    assert _seeds_is_stochastic(sampler) is stochastic
+
+
+@pytest.mark.parametrize(
+    ("function_name", "options", "replay_safe"),
+    (
+        ("sample_seeds_2", {}, False),
+        ("sample_seeds_3", {}, False),
+        ("sample_seeds_2", {"eta": 0.0}, True),
+        ("sample_seeds_3", {"s_noise": 0.0}, True),
+        (
+            "sample_seeds_2",
+            {"eta": 0.0, "noise_sampler": lambda *_args: torch.zeros(1)},
+            True,
+        ),
+    ),
+)
+def test_seeds_replay_safety_requires_deterministic_native_configuration(
+    function_name, options, replay_safe
+):
+    sampler = _sampler(function_name)
+    sampler.extra_options = options
+
+    assert sampler_supports_seeded_replay(sampler) is replay_safe
+
+
+@pytest.mark.parametrize(
+    ("function_name", "options"),
+    (
+        ("sample_refdelta_seeds_2", {}),
+        ("sample_refdelta_seeds_3", {}),
+        ("sample_refdelta_seeds_2", {"eta": 0.0}),
+        ("sample_refdelta_seeds_3", {"s_noise": 0.0}),
+    ),
+)
+def test_refdelta_seeds_replay_is_intentionally_causal_only(function_name, options):
+    sampler = _sampler(function_name)
+    sampler.extra_options = options
+
+    assert not sampler_supports_seeded_replay(sampler)
+
+
+def test_seeds_2_endpoint_stage_is_rejected_for_spectrum_tracking():
+    reason = _seeds_option_contract("sample_seeds_2", {"r": 1.0})
+
+    assert reason is not None
+    assert "strictly interior stage coordinate" in reason
+
+
+def test_seeds_3_non_interior_stage_order_is_rejected_for_spectrum_tracking():
+    reason = _seeds_option_contract(
+        "sample_seeds_3",
+        {"r_1": 0.75, "r_2": 0.5},
+    )
+
+    assert reason is not None
+    assert "strictly interior ordered stages" in reason
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    (
+        ({"eta": float("nan")}, "eta"),
+        ({"s_noise": float("inf")}, "s_noise"),
+        ({"noise_sampler": object()}, "noise_sampler"),
+    ),
+)
+def test_seeds_invalid_options_fail_closed(options, message):
+    reason = _seeds_option_contract("sample_seeds_2", options)
+
+    assert reason is not None
+    assert message in reason
+
+
+def test_stochastic_seeds_outer_wrapper_enters_state_residual_spectrum(monkeypatch, caplog):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            model_aware_mode="off",
+            offline_smoothing_replay=False,
+            debug=True,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={
+            BINDING_KEY: SpectrumH3Binding(runtime),
+            "transformer_options": {},
+        },
+        model_patcher=object(),
+    )
+    sampler = _sampler("sample_seeds_2")
+    sampler.extra_options = {}
+    calls = []
+
+    monkeypatch.setattr(
+        sampling_module,
+        "_native_seeds_preflight_reason",
+        lambda _sampler, _model_options: None,
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            calls.append(
+                (
+                    runtime.active_run_id,
+                    runtime.stochastic_multistage,
+                    runtime.stats.total_steps,
+                    runtime._run.forecastable_stage_indices,
+                    runtime._run.separate_stage_histories,
+                    args,
+                    kwargs,
+                )
+            )
+            return "state-residual-seeds"
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            sampler,
+            torch.tensor([1.0, 0.5, 0.0]),
+            seed=17,
+        )
+
+    assert result == "state-residual-seeds"
+    assert len(calls) == 1
+    assert calls[0][0] is not None
+    assert calls[0][1] is True
+    assert calls[0][2] == 3
+    assert calls[0][3] == (1,)
+    assert calls[0][4] is False
+    assert runtime.active_run_id is None
+    assert "running the untouched native sampler" not in caplog.text
+    assert "feature_geometry=state_conditioned_residual_shared_history" in caplog.text
+    assert "stage_histories=shared" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "sample_refdelta_er_sde",
+        "sample_refdelta_seeds_2",
+        "sample_refdelta_seeds_3",
+        "sample_refdelta_sa_solver",
+        "sample_refdelta_sa_solver_pece",
+    ),
+)
+def test_refdelta_sampler_multigpu_bypasses_before_runtime_start(
+    monkeypatch,
+    caplog,
+    function_name,
+):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            model_aware_mode="off",
+            offline_smoothing_replay=False,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={
+            BINDING_KEY: SpectrumH3Binding(runtime),
+            "transformer_options": {},
+            "multigpu_clones": [object()],
+        },
+        model_patcher=object(),
+    )
+    sampler = _sampler(function_name)
+    sampler.extra_options = {}
+    active_runs = []
+
+    def unexpected_preflight(*_args, **_kwargs):
+        raise AssertionError("multi-GPU RefDelta bypass must precede solver preflight")
+
+    monkeypatch.setattr(
+        sampling_module,
+        "_native_er_sde_preflight_reason",
+        unexpected_preflight,
+    )
+    monkeypatch.setattr(
+        sampling_module,
+        "_native_seeds_preflight_reason",
+        unexpected_preflight,
+    )
+    monkeypatch.setattr(
+        sampling_module,
+        "_native_sa_solver_preflight_reason",
+        unexpected_preflight,
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            active_runs.append(runtime.active_run_id)
+            return "native-refdelta-multigpu"
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            sampler,
+            torch.tensor([1.0, 0.5, 0.0]),
+            seed=17,
+        )
+
+    assert result == "native-refdelta-multigpu"
+    assert active_runs == [None]
+    assert runtime.active_run_id is None
+    assert "multi-GPU parallel model calls bypass transactional step finalization" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "sample_refdelta_er_sde",
+        "sample_refdelta_seeds_2",
+        "sample_refdelta_seeds_3",
+        "sample_refdelta_sa_solver",
+        "sample_refdelta_sa_solver_pece",
+    ),
+)
+def test_refdelta_sampler_wrapper_does_not_inject_bridge_for_multigpu(
+    function_name,
+):
+    runtime = SpectrumH3Runtime(SpectrumH3Config(model_aware_mode="off"))
+    runtime.start_run(
+        torch.tensor([1.0, 0.0]),
+        function_name,
+        supported_sampler=True,
+    )
+    sampler = _sampler(function_name)
+    seen = {}
+
+    class Executor:
+        class_obj = sampler
+
+        def __call__(
+            self,
+            model_wrap,
+            sigmas,
+            extra_args,
+            callback,
+            noise,
+            latent_image,
+            denoise_mask,
+            disable_pbar,
+        ):
+            seen["extra_args"] = extra_args
+            return "native-inner-refdelta"
+
+    extra_args = {
+        "model_options": {
+            "multigpu_clones": [object()],
+            "transformer_options": {},
+        }
+    }
+    try:
+        result = sampling_module.sampler_sample_wrapper(
+            Executor(),
+            object(),
+            torch.tensor([1.0, 0.0]),
+            extra_args,
+            None,
+            torch.ones(1),
+        )
+    finally:
+        runtime.end_run(runtime.active_run_id)
+
+    assert result == "native-inner-refdelta"
+    transformer_options = seen["extra_args"]["model_options"]["transformer_options"]
+    assert sampling_module.REFDELTA_BRIDGE_KEY not in transformer_options
+
+
+def test_stochastic_seeds_offline_request_runs_one_causal_spectrum_pass(monkeypatch, caplog):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            model_aware_mode="off",
+            offline_smoothing_replay=True,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={
+            BINDING_KEY: SpectrumH3Binding(runtime),
+            "transformer_options": {},
+        },
+        model_patcher=object(),
+    )
+    sampler = _sampler("sample_seeds_2")
+    sampler.extra_options = {}
+    active_runs = []
+
+    monkeypatch.setattr(
+        sampling_module,
+        "_native_seeds_preflight_reason",
+        lambda _sampler, _model_options: None,
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            active_runs.append(
+                (runtime.active_run_id, runtime.stochastic_multistage, runtime.offline_phase)
+            )
+            return "causal-stochastic-seeds"
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            sampler,
+            torch.tensor([1.0, 0.5, 0.0]),
+            seed=17,
+        )
+
+    assert result == "causal-stochastic-seeds"
+    assert len(active_runs) == 1
+    assert active_runs[0][0] is not None
+    assert active_runs[0][1] is True
+    assert active_runs[0][2] is None
+    assert "one causal state-conditioned Spectrum pass" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("sigmas", "expected_fragment"),
+    (
+        (torch.tensor([1.0, 0.5, 0.0]), None),
+        (torch.tensor([1.0, 0.5, 0.25]), None),
+        (torch.tensor([1.0, 0.0, 0.0]), "nonpositive pre-terminal"),
+        (torch.tensor([1.0, float("nan"), 0.0]), "nonfinite"),
+    ),
+)
+def test_seeds_stage_schedule_contract(sigmas, expected_fragment):
+    reason = _seeds_stage_schedule_reason(sigmas)
+
+    if expected_fragment is None:
+        assert reason is None
+    else:
+        assert reason is not None
+        assert expected_fragment in reason
+
+def test_unsupported_sampler_does_not_build_unused_model_profile(monkeypatch):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(model_aware_mode="schedule", offline_smoothing_replay=True)
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}}
+    )
+    calls = []
+    monkeypatch.setattr(
+        sampling_module,
+        "get_model_forecastability_profile",
+        lambda _patcher: calls.append(_patcher),
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            return "native-result"
+
+    result = outer_sample_wrapper(
+        Executor(),
+        torch.ones(1),
+        torch.zeros(1),
+        _sampler("sample_heun"),
+        torch.tensor([1.0, 0.0]),
+    )
+
+    assert result == "native-result"
+    assert calls == []
+
+
+def test_replay_unsafe_er_sde_does_not_build_unused_model_profile(monkeypatch):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(model_aware_mode="schedule", offline_smoothing_replay=True)
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}}
+    )
+    sampler = _sampler("sample_er_sde")
+    sampler.extra_options = {"noise_sampler": lambda *args: args[0]}
+    profile_calls = []
+    monkeypatch.setattr(
+        sampling_module,
+        "get_model_forecastability_profile",
+        lambda _patcher: profile_calls.append(_patcher),
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            return "native-er-sde-result"
+
+    result = outer_sample_wrapper(
+        Executor(),
+        torch.ones(1),
+        torch.zeros(1),
+        sampler,
+        torch.tensor([1.0, 0.0]),
+    )
+
+    assert result == "native-er-sde-result"
+    assert profile_calls == []
+
+
+def test_er_sde_native_sampler_components_are_seeded_replay_safe():
+    sampler = _sampler("sample_er_sde")
+    sampler.extra_options = {"max_stage": 2, "s_noise": 0.75}
+
+    assert sampler_is_supported(sampler)
+    assert sampler_supports_seeded_replay(sampler)
+
+
+@pytest.mark.parametrize("option_name", ("noise_sampler", "noise_scaler"))
+def test_er_sde_custom_sampler_components_are_not_seeded_replay_safe(option_name):
+    sampler = _sampler("sample_er_sde")
+    sampler.extra_options = {option_name: lambda *args: args[0]}
+
+    assert sampler_is_supported(sampler)
+    assert not sampler_supports_seeded_replay(sampler)
+
+
+class _WrapperTestModel:
+    def __init__(self, outer_wrappers):
+        self.model_options = {}
+        self.wrappers = {"outer_sample": outer_wrappers}
+        self.callbacks = {}
+
+    def get_wrappers(self, wrapper_type, key):
+        return self.wrappers.get(wrapper_type, {}).get(key, [])
+
+    def add_wrapper_with_key(self, wrapper_type, key, wrapper):
+        self.wrappers.setdefault(wrapper_type, {}).setdefault(key, []).append(wrapper)
+
+    def get_callbacks(self, callback_type, key):
+        return self.callbacks.get(callback_type, {}).get(key, [])
+
+    def add_callback_with_key(self, callback_type, key, callback):
+        self.callbacks.setdefault(callback_type, {}).setdefault(key, []).append(callback)
+
+
+def _install_with_fake_patcher_extension(monkeypatch, model, runtime):
+    fake_extension = ModuleType("comfy.patcher_extension")
+    fake_extension.WrappersMP = SimpleNamespace(
+        OUTER_SAMPLE="outer_sample",
+        PREDICT_NOISE="predict_noise",
+        SAMPLER_SAMPLE="sampler_sample",
+    )
+    fake_extension.CallbacksMP = SimpleNamespace(ON_CLONE="on_clone")
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.patcher_extension = fake_extension
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.patcher_extension", fake_extension)
+    install_sampler_wrappers(model, runtime)
+
+
+def test_offline_install_places_kj_preview_inside_spectrum_wrapper(monkeypatch):
+    kj_preview = object()
+    upstream = object()
+    model = _WrapperTestModel(
+        {
+            "kj_preview_override": [kj_preview],
+            "upstream_sampling_wrapper": [upstream],
+        }
+    )
+
+    _install_with_fake_patcher_extension(monkeypatch, model, SpectrumH3Runtime(SpectrumH3Config()))
+
+    assert list(model.wrappers["outer_sample"]) == [
+        "upstream_sampling_wrapper",
+        "spectrum_minimax_h3",
+        "kj_preview_override",
+    ]
+    assert model.wrappers["outer_sample"]["kj_preview_override"] == [kj_preview]
+    assert model.wrappers["outer_sample"]["upstream_sampling_wrapper"] == [upstream]
+
+
+def test_single_pass_install_preserves_kj_preview_wrapper_order(monkeypatch):
+    model = _WrapperTestModel(
+        {
+            "kj_preview_override": [object()],
+            "upstream_sampling_wrapper": [object()],
+        }
+    )
+    runtime = SpectrumH3Runtime(SpectrumH3Config(offline_smoothing_replay=False))
+
+    _install_with_fake_patcher_extension(monkeypatch, model, runtime)
+
+    assert list(model.wrappers["outer_sample"]) == [
+        "kj_preview_override",
+        "upstream_sampling_wrapper",
+        "spectrum_minimax_h3",
+    ]
+
+
+def test_easycache_on_same_model_bypasses_spectrum_run(caplog):
+    runtime = SpectrumH3Runtime(SpectrumH3Config())
+    guider = SimpleNamespace(
+        model_options={
+            BINDING_KEY: SpectrumH3Binding(runtime),
+            "transformer_options": {"easycache": object()},
+        }
+    )
+    calls = []
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return "native-cache-result"
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            "noise",
+            "latent",
+            _sampler("sample_euler"),
+            "sigmas",
+            denoise_mask="mask",
+            callback="callback",
+            disable_pbar=True,
+            seed=7,
+            latent_shapes=("video", "audio"),
+        )
+
+    assert result == "native-cache-result"
+    assert len(calls) == 1
+    assert runtime.active_run_id is None
+    assert "EasyCache or LazyCache is active" in caplog.text
+
+
+def test_predict_noise_passthrough_survives_a_downstream_model_bypass(caplog):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            warmup_steps=1,
+            tail_actual_steps=0,
+            bootstrap_first_forecast=True,
+        )
+    )
+    run_id = runtime.start_run(
+        torch.tensor([1.0, 0.5, 0.0]),
+        "sample_euler",
+        supported_sampler=True,
+        max_consecutive_forecasts=1,
+        min_actual_steps_after_forecast=1,
+    )
+    guider = SimpleNamespace(model_options={BINDING_KEY: SpectrumH3Binding(runtime)})
+    calls = []
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return f"intercepted-result-{len(calls)}"
+
+    try:
+        with caplog.at_level("WARNING"):
+            first = predict_noise_wrapper(
+                Executor(), "latent", torch.tensor([1.0]), {"sentinel": True}, seed=7
+            )
+            second = predict_noise_wrapper(
+                Executor(), "latent", torch.tensor([0.5]), {"sentinel": True}, seed=7
+            )
+
+        assert first == "intercepted-result-1"
+        assert second == "intercepted-result-2"
+        assert len(calls) == 2
+        assert runtime.stats.bypassed_steps == 2
+        assert runtime.active_step_id is None
+        assert caplog.text.count("accepting the wrapped result as a passthrough") == 1
+    finally:
+        runtime.end_run(run_id)
+
+
+@pytest.mark.parametrize("function_name", ("sample_euler", "sample_er_sde", "_turbo_sampler"))
+def test_default_offline_outer_sample_reports_both_passes_and_callbacks_only_replay(
+    monkeypatch, function_name
+):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            degree=1,
+            max_history=4,
+            warmup_steps=2,
+            tail_actual_steps=0,
+            bootstrap_first_forecast=False,
+            audio_blend_weight=0.5,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}},
+        conds={"positive": [{"nested": {"marker": "original"}}]},
+    )
+    starts = []
+    callback_arguments = []
+    progress_totals = []
+    progress_updates = []
+    topology = (("tiny", 1),)
+    labels = ((0, "positive"),)
+
+    class ProgressBar:
+        def __init__(self, total):
+            progress_totals.append(total)
+
+        def update_absolute(self, value, total=None, preview=None):
+            progress_updates.append((value, total, preview))
+
+    fake_utils = ModuleType("comfy.utils")
+    fake_utils.ProgressBar = ProgressBar
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.utils = fake_utils
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.utils", fake_utils)
+    callback_progress = ProgressBar(2)
+
+    def callback(*args):
+        callback_arguments.append(args)
+        callback_progress.update_absolute(args[0] + 1, args[3])
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(
+            self,
+            run_noise,
+            run_latent,
+            _sampler,
+            run_sigmas,
+            _mask,
+            run_callback,
+            _disable_pbar,
+            _seed,
+            *,
+            latent_shapes=None,
+        ):
+            assert guider.conds["positive"][0]["nested"]["marker"] == "original"
+            starts.append(
+                (
+                    runtime.offline_phase,
+                    run_noise.clone(),
+                    run_latent.clone(),
+                    run_callback,
+                    _disable_pbar,
+                )
+            )
+            for index, sigma in enumerate(run_sigmas[:-1]):
+                decision = runtime.begin_step(sigma)
+                call_id, actual = runtime.begin_model_call(
+                    decision["run_id"],
+                    decision["step_id"],
+                    topology=topology,
+                    labels=labels,
+                    expected_shape=(1, 1, 1),
+                )
+                if actual:
+                    runtime.observe_actual(
+                        decision["run_id"],
+                        decision["step_id"],
+                        call_id,
+                        torch.full((1, 1, 1), float(index)),
+                    )
+                else:
+                    runtime.predict(
+                        decision["run_id"],
+                        decision["step_id"],
+                        call_id,
+                        device=torch.device("cpu"),
+                        dtype=torch.float32,
+                    )
+                runtime.finalize_step(decision["run_id"], decision["step_id"])
+                if run_callback is not None:
+                    run_callback(index, run_noise, run_latent, len(run_sigmas) - 1)
+            if runtime.offline_phase == "first_pass":
+                guider.conds["positive"][0]["nested"]["marker"] = "processed-first-pass"
+                run_noise.add_(10.0)
+            return run_noise + run_latent
+
+    noise = torch.ones(1)
+    latent = torch.full((1,), 2.0)
+    sigmas = torch.tensor([1.0, 0.5, 0.0])
+    result = outer_sample_wrapper(
+        Executor(),
+        noise,
+        latent,
+        _sampler(function_name),
+        sigmas,
+        callback=callback,
+        seed=7,
+        latent_shapes=((1,),),
+    )
+
+    assert [phase for phase, *_rest in starts] == ["first_pass", "replay"]
+    assert starts[0][3] is not None
+    assert starts[1][3] is not None
+    assert [entry[4] for entry in starts] == [False, True]
+    torch.testing.assert_close(starts[0][1], torch.ones(1))
+    torch.testing.assert_close(starts[1][1], torch.ones(1))
+    torch.testing.assert_close(starts[1][2], torch.full((1,), 2.0))
+    assert progress_totals == [2, 4]
+    assert progress_updates == [
+        (1, 4, None),
+        (2, 4, None),
+        (3, 4, None),
+        (4, 4, None),
+    ]
+    assert len(callback_arguments) == 2
+    assert [(args[0], args[3]) for args in callback_arguments] == [(2, 4), (3, 4)]
+    torch.testing.assert_close(result, torch.full((1,), 3.0))
+    assert runtime.active_run_id is None
+    assert runtime.offline_archive is None
+
+
+def test_offline_progress_finishes_when_capture_cannot_be_replayed(monkeypatch):
+    runtime = SpectrumH3Runtime(SpectrumH3Config())
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}},
+        conds={},
+    )
+    progress_updates = []
+    callback_arguments = []
+
+    class ProgressBar:
+        def __init__(self, total):
+            assert total == 4
+
+        def update_absolute(self, value, total=None, preview=None):
+            progress_updates.append((value, total, preview))
+
+    fake_utils = ModuleType("comfy.utils")
+    fake_utils.ProgressBar = ProgressBar
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.utils = fake_utils
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.utils", fake_utils)
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(
+            self,
+            run_noise,
+            run_latent,
+            _sampler,
+            _sigmas,
+            _mask,
+            run_callback,
+            _disable_pbar,
+            _seed,
+            *,
+            latent_shapes=None,
+        ):
+            run_callback(0, run_noise, run_latent, 2)
+            return "valid-first-pass"
+
+    result = outer_sample_wrapper(
+        Executor(),
+        torch.ones(1),
+        torch.zeros(1),
+        _sampler("sample_euler"),
+        torch.tensor([1.0, 0.5, 0.0]),
+        callback=lambda *args: callback_arguments.append(args),
+        seed=7,
+    )
+
+    assert result == "valid-first-pass"
+    assert progress_updates == [(1, 4, None), (4, 4, None)]
+    assert callback_arguments == []
+    assert runtime.active_run_id is None
+    assert runtime.offline_archive is None
+
+
+def test_offline_smoother_failure_returns_completed_first_pass(monkeypatch, caplog):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            debug=True,
+            degree=1,
+            max_history=4,
+            force_actual=True,
+            model_aware_mode="off",
+            offline_smoothing_replay=True,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}},
+        conds={},
+    )
+    topology = (("tiny", 1),)
+    labels = ((0, "positive"),)
+    executor_calls = 0
+
+    class FailingSmoother:
+        def __init__(self, *_args, **_kwargs):
+            assert runtime.active_run_id is None
+            raise MemoryError("synthetic smoother allocation failure")
+
+    monkeypatch.setattr(runtime_module, "OfflineSmoother", FailingSmoother)
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(
+            self,
+            run_noise,
+            _run_latent,
+            _sampler,
+            run_sigmas,
+            _mask,
+            _callback,
+            _disable_pbar,
+            _seed,
+            *,
+            latent_shapes=None,
+        ):
+            nonlocal executor_calls
+            executor_calls += 1
+            for index, sigma in enumerate(run_sigmas[:-1]):
+                decision = runtime.begin_step(sigma)
+                call_id, actual = runtime.begin_model_call(
+                    decision["run_id"],
+                    decision["step_id"],
+                    topology=topology,
+                    labels=labels,
+                    expected_shape=(1, 1, 1),
+                )
+                assert actual
+                runtime.observe_actual(
+                    decision["run_id"],
+                    decision["step_id"],
+                    call_id,
+                    torch.full((1, 1, 1), float(index)),
+                )
+                runtime.finalize_step(decision["run_id"], decision["step_id"])
+            return "completed-first-pass"
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            _sampler("sample_er_sde"),
+            torch.tensor([1.0, 0.5, 0.0]),
+            seed=7,
+        )
+
+    assert result == "completed-first-pass"
+    assert executor_calls == 1
+    assert runtime.active_run_id is None
+    assert runtime.offline_archive is None
+    assert "offline smoother construction failed" in caplog.text
+    assert "returning the valid first-pass result" in caplog.text
+
+
+def test_offline_capture_completion_exception_returns_completed_first_pass(
+    monkeypatch, caplog
+):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            model_aware_mode="off",
+            offline_smoothing_replay=True,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}},
+        conds={},
+    )
+    executor_calls = 0
+
+    def fail_completion():
+        assert runtime.active_run_id is None
+        raise RuntimeError("synthetic archive completion failure")
+
+    monkeypatch.setattr(runtime, "complete_offline_capture", fail_completion)
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *_args, **_kwargs):
+            nonlocal executor_calls
+            executor_calls += 1
+            return "completed-first-pass"
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            _sampler("sample_er_sde"),
+            torch.tensor([1.0, 0.0]),
+            seed=7,
+        )
+
+    assert result == "completed-first-pass"
+    assert executor_calls == 1
+    assert runtime.active_run_id is None
+    assert runtime.offline_archive is None
+    assert "offline capture completion failed" in caplog.text
+    assert "returning the valid first-pass result" in caplog.text
+
+
+def test_replay_only_er_sde_transition_is_timestamped_and_schedule_invariant(caplog):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            debug=True,
+            degree=1,
+            max_history=4,
+            force_actual=True,
+            model_aware_mode="off",
+            offline_smoothing_replay=True,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}},
+        conds={},
+    )
+    topology = (("target_audio_rows", 1), ("target_video_rows", 1))
+    labels = ((0, "positive"),)
+    schedules = []
+    actual_calls = []
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(
+            self,
+            _run_noise,
+            _run_latent,
+            _sampler,
+            run_sigmas,
+            _mask,
+            _callback,
+            _disable_pbar,
+            _seed,
+            *,
+            latent_shapes=None,
+        ):
+            phase = runtime.offline_phase
+            step_ids = []
+            phase_actual_calls = 0
+            for index, sigma in enumerate(run_sigmas[:-1]):
+                decision = runtime.begin_step(sigma)
+                step_ids.append(decision["step_id"])
+                call_id, actual = runtime.begin_model_call(
+                    decision["run_id"],
+                    decision["step_id"],
+                    topology=topology,
+                    labels=labels,
+                    expected_shape=(1, 2, 1),
+                )
+                if actual:
+                    phase_actual_calls += 1
+                    runtime.observe_actual(
+                        decision["run_id"],
+                        decision["step_id"],
+                        call_id,
+                        torch.full((1, 2, 1), float(index)),
+                    )
+                else:
+                    assert runtime.predict(
+                        decision["run_id"],
+                        decision["step_id"],
+                        call_id,
+                        device=torch.device("cpu"),
+                        dtype=torch.float32,
+                    ) is not None
+                runtime.finalize_step(decision["run_id"], decision["step_id"])
+            schedules.append((phase, step_ids))
+            actual_calls.append((phase, phase_actual_calls))
+            return phase
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            _sampler("sample_er_sde"),
+            torch.tensor([1.0, 0.5, 0.0]),
+            seed=7,
+        )
+
+    assert result == "replay"
+    assert schedules == [("first_pass", [0, 1]), ("replay", [0, 1])]
+    assert actual_calls == [("first_pass", 2), ("replay", 0)]
+    assert runtime.stats.offline_replay_steps == 2
+    assert runtime.stats.offline_replay_model_calls == 2
+    events = [
+        record.getMessage().split("event=", 1)[1].split()[0]
+        for record in caplog.records
+        if "Spectrum H3 offline transition ts=" in record.getMessage()
+    ]
+    required = [
+        "observe_actual_end",
+        "finalize_step_end",
+        "first_pass_executor_return",
+        "complete_offline_capture_begin",
+        "offline_smoother_construction_begin",
+        "offline_smoother_validation_begin",
+        "offline_smoother_validation_end",
+        "offline_smoother_construction_end",
+        "begin_offline_replay_begin",
+        "begin_offline_replay_end",
+    ]
+    positions = [events.index(event) for event in required]
+    assert positions == sorted(positions)
+
+
+def test_offline_progress_finishes_when_replay_aborts(monkeypatch):
+    runtime = SpectrumH3Runtime(SpectrumH3Config())
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}},
+        conds={},
+    )
+    progress_updates = []
+    callback_arguments = []
+    topology = (("tiny", 1),)
+    labels = ((0, "positive"),)
+
+    class ProgressBar:
+        def __init__(self, total):
+            assert total == 4
+
+        def update_absolute(self, value, total=None, preview=None):
+            progress_updates.append((value, total, preview))
+
+    fake_utils = ModuleType("comfy.utils")
+    fake_utils.ProgressBar = ProgressBar
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.utils = fake_utils
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.utils", fake_utils)
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(
+            self,
+            run_noise,
+            run_latent,
+            _sampler,
+            run_sigmas,
+            _mask,
+            run_callback,
+            _disable_pbar,
+            _seed,
+            *,
+            latent_shapes=None,
+        ):
+            if runtime.offline_phase == "replay":
+                raise OfflineReplayAbort("test replay failure")
+
+            for index, sigma in enumerate(run_sigmas[:-1]):
+                decision = runtime.begin_step(sigma)
+                call_id, actual = runtime.begin_model_call(
+                    decision["run_id"],
+                    decision["step_id"],
+                    topology=topology,
+                    labels=labels,
+                    expected_shape=(1, 1, 1),
+                )
+                assert actual
+                runtime.observe_actual(
+                    decision["run_id"],
+                    decision["step_id"],
+                    call_id,
+                    torch.full((1, 1, 1), float(index)),
+                )
+                runtime.finalize_step(decision["run_id"], decision["step_id"])
+                run_callback(index, run_noise, run_latent, len(run_sigmas) - 1)
+            return "valid-first-pass"
+
+    result = outer_sample_wrapper(
+        Executor(),
+        torch.ones(1),
+        torch.zeros(1),
+        _sampler("sample_euler"),
+        torch.tensor([1.0, 0.5, 0.0]),
+        callback=lambda *args: callback_arguments.append(args),
+        seed=7,
+    )
+
+    assert result == "valid-first-pass"
+    assert progress_updates == [(1, 4, None), (2, 4, None), (4, 4, None)]
+    assert callback_arguments == []
+    assert runtime.active_run_id is None
+    assert runtime.offline_archive is None
+
+
+@pytest.mark.parametrize("option_name", ("noise_sampler", "noise_scaler"))
+def test_offline_er_sde_custom_sampler_components_use_true_native_bypass(
+    option_name, caplog
+):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            degree=1,
+            max_history=4,
+            bootstrap_first_forecast=False,
+            offline_smoothing_replay=True,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}}
+    )
+    sampler = _sampler("sample_er_sde")
+    sampler.extra_options = {option_name: lambda *args: args[0]}
+    calls = []
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            assert runtime.active_run_id is None
+            calls.append((args, kwargs))
+            return "native-er-sde-result"
+
+    callback = object()
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            sampler,
+            torch.tensor([1.0, 0.0]),
+            callback=callback,
+            seed=7,
+        )
+
+    assert result == "native-er-sde-result"
+    assert len(calls) == 1
+    assert calls[0][0][5] is callback
+    assert runtime.active_run_id is None
+    assert "native seeded noise_sampler and noise_scaler" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "experiment_name",
+    ("anchor_residual_feedback", "selective_rollback_correction"),
+)
+def test_er_sde_does_not_enable_unreviewed_experimental_modes(
+    experiment_name, caplog
+):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            degree=1,
+            max_history=4,
+            bootstrap_first_forecast=False,
+            offline_smoothing_replay=False,
+            **{experiment_name: True},
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}}
+    )
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            assert runtime.supported_sampler
+            assert runtime.experiment_disabled_reason is not None
+            return "ordinary-spectrum-er-sde"
+
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            _sampler("sample_er_sde"),
+            torch.tensor([1.0, 0.5, 0.0]),
+            seed=7,
+        )
+
+    assert result == "ordinary-spectrum-er-sde"
+    assert runtime.active_run_id is None
+    assert "reviewed only for ordinary Spectrum and offline smoothing replay" in caplog.text
+
+
+def test_offline_unsupported_sampler_uses_true_native_bypass(caplog):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            degree=1,
+            max_history=4,
+            bootstrap_first_forecast=False,
+            offline_smoothing_replay=True,
+        )
+    )
+    guider = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime), "transformer_options": {}}
+    )
+    calls = []
+
+    class Executor:
+        class_obj = guider
+
+        def __call__(self, *args, **kwargs):
+            assert runtime.active_run_id is None
+            calls.append((args, kwargs))
+            return "native-result"
+
+    callback = object()
+    with caplog.at_level("WARNING"):
+        result = outer_sample_wrapper(
+            Executor(),
+            torch.ones(1),
+            torch.zeros(1),
+            _sampler("sample_euler_ancestral"),
+            torch.tensor([1.0, 0.0]),
+            callback=callback,
+            seed=7,
+        )
+
+    assert result == "native-result"
+    assert len(calls) == 1
+    assert calls[0][0][5] is callback
+    assert runtime.active_run_id is None
+    assert "running one native pass" in caplog.text
+
+
+def test_selective_rollback_res_falls_back_before_sampler_mutation(monkeypatch, caplog):
+    runtime = SpectrumH3Runtime(
+        SpectrumH3Config(
+            degree=1,
+            max_history=4,
+            warmup_steps=2,
+            bootstrap_first_forecast=False,
+            selective_rollback_correction=True,
+            offline_smoothing_replay=False,
+        )
+    )
+    run_id = runtime.start_run(
+        torch.tensor([1.0, 0.5, 0.0]),
+        "sample_res_multistep",
+        supported_sampler=True,
+    )
+    model_wrap = SimpleNamespace(
+        model_options={BINDING_KEY: SpectrumH3Binding(runtime)}
+    )
+    fake_sampling = ModuleType("comfy.k_diffusion.sampling")
+    fake_sampling.sample_euler = object()
+    fake_k_diffusion = ModuleType("comfy.k_diffusion")
+    fake_k_diffusion.sampling = fake_sampling
+    fake_comfy = ModuleType("comfy")
+    fake_comfy.k_diffusion = fake_k_diffusion
+    monkeypatch.setitem(sys.modules, "comfy", fake_comfy)
+    monkeypatch.setitem(sys.modules, "comfy.k_diffusion", fake_k_diffusion)
+    monkeypatch.setitem(sys.modules, "comfy.k_diffusion.sampling", fake_sampling)
+    calls = []
+
+    class Executor:
+        class_obj = _sampler("sample_res_multistep")
+
+        def __call__(self, *args):
+            calls.append(args)
+            return "ordinary-spectrum"
+
+    with caplog.at_level("WARNING"):
+        result = sampler_sample_wrapper(
+            Executor(),
+            model_wrap,
+            torch.tensor([1.0, 0.5, 0.0]),
+            {"model_options": {}},
+            None,
+            torch.ones(1),
+            torch.zeros(1),
+            None,
+            True,
+        )
+
+    assert result == "ordinary-spectrum"
+    assert len(calls) == 1
+    assert runtime._run.next_step_id == 0
+    assert "supports only the exact reviewed sample_euler contract" in runtime.experiment_disabled_reason
+    assert caplog.text.count("experimental mode disabled") == 1
+    runtime.end_run(run_id)

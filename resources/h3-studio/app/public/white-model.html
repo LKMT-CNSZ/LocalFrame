@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self' blob: data:; object-src 'none'">
+<title>LocalFrame 白模渲染</title><link rel="stylesheet" href="/white-model.css"></head>
+<body><main class="studio">
+<aside class="settings"><span class="eyebrow">WHITE MODEL STUDIO</span><h1>白模渲染</h1>
+<p class="muted">导入白模视频，保留原动作与镜头，在本机改写材质和画风。</p>
+<section class="video-settings"><h2>白模视频 → 动画</h2>
+<label>导入白模视频<input id="whiteVideo" type="file" accept="video/mp4,.mp4"></label>
+<p class="hint">MP4，0.5 至 20 秒，最高 4K、150MB。输出为 8 帧/秒 MP4，并尝试保留原音轨。原文件不会修改。</p>
+<label>本地图片模型<select id="videoModel"></select></label><button id="refreshVideoModels" type="button">刷新本地模型</button><p id="videoModelStatus" class="hint"></p>
+<label>材质与画风描述<textarea id="videoPrompt" rows="4" maxlength="2000" placeholder="例如：保持人物姿态、镜头和场景结构，将白模渲染为彩色黏土动画，柔和电影灯光"></textarea></label>
+<label>画风变化强度<input id="videoStrength" type="range" min="0.15" max="0.55" step="0.05" value="0.35"><span id="videoStrengthValue">0.35</span></label>
+<button id="renderVideo" class="primary" disabled>在本机渲染动画</button><p class="hint">使用逐帧图生图。原动作与镜头来自输入视频，但画面可能闪烁，结构也可能有细小变化；复杂时序一致性需要专用视频模型。</p></section>
+<h2>附加工具 · 三维模型预览</h2>
+<label class="upload">导入白模与配套文件<input id="files" type="file" multiple accept=".glb,.gltf,.obj,.stl,.bin,.png,.jpg,.jpeg,.webp"></label>
+<p class="hint">支持 GLB、GLTF、OBJ、STL。GLTF 请同时选择 .bin 与贴图；OBJ 仅导入几何。不支持 Draco 压缩、SKP、FBX，请先导出为 GLB。文件仅在本机读取，单个模型 ≤ 100MB，总计 ≤ 200MB。</p>
+<button id="demo" type="button">载入示例白模</button>
+<h2>材质与光照</h2>
+<label>统一材质<select id="material"><option value="white">白色石膏</option><option value="concrete">暖灰混凝土</option><option value="metal">拉丝金属</option><option value="clay">陶土</option><option value="original">保留模型原材质</option></select></label>
+<label>材质颜色<input id="color" type="color" value="#e5e5e0"></label>
+<label>粗糙度<input id="roughness" type="range" min="0.05" max="1" step="0.05" value="0.8"></label>
+<label>灯光强度<input id="light" type="range" min="0.2" max="6" step="0.1" value="3"></label>
+<label>模型绕竖轴旋转<input id="rotation" type="range" min="-180" max="180" value="0"></label>
+<label>背景<input id="background" type="color" value="#242932"></label>
+<div class="views"><button data-view="iso">透视</button><button data-view="front">正面</button><button data-view="side">侧面</button><button data-view="top">顶视</button></div>
+<label>导出尺寸<select id="size"><option value="1024x1024">1024 × 1024</option><option value="1920x1080">1920 × 1080</option><option value="2560x1440">2560 × 1440（2K）</option><option value="1440x2560">1440 × 2560（竖屏）</option></select></label>
+<button id="export" class="primary" disabled>标准渲染 · 导出 PNG</button>
+<p class="hint">标准渲染为本地 WebGL/PBR 实时渲染，不是离线路径追踪。输出不会改变模型文件。</p>
+<details><summary>AI 效果图 · 兼容图像编辑 API</summary>
+<p class="hint">仅支持接收参考图的 /v1/images/edits 接口，不使用视频模型或纯文生图接口。只上传当前视角 PNG 与提示词，不上传三维文件。AI 可能改变几何细节，不作为精确施工图。</p>
+<label>API 根地址<input id="apiUrl" type="url" placeholder="https://服务商地址/v1" autocomplete="off"></label>
+<label>图像编辑模型 ID<input id="apiModel" placeholder="填写服务商提供的图像编辑模型 ID" maxlength="200"></label>
+<label>API Key（仅本页内存）<input id="apiKey" type="password" autocomplete="off"></label>
+<label>效果描述<textarea id="prompt" rows="4" maxlength="3000" placeholder="例如：保留建筑轮廓、窗洞与相机视角，现代简约风格，浅色石材，温暖日光"></textarea></label>
+<label class="consent"><input id="consent" type="checkbox">同意将当前白模画面发送到此服务，可能产生费用</label>
+<button id="ai" class="primary" disabled>以当前视角生成 AI 效果图</button>
+<p class="hint">AI 输出尺寸取决于模型；当前兼容请求使用 1024 × 1024。原生尺寸以返回图片为准。非正方形构图会等比留边，避免拉伸。</p>
+</details></aside>
+<section class="stage"><section id="videoStage"><h2>视频预览与结果</h2><video id="sourceVideo" controls playsinline hidden></video><div id="videoStatus" role="status">请选择白模视频。</div><progress id="videoProgress" max="100" value="0" hidden></progress><video id="renderedVideo" controls playsinline hidden></video><a id="downloadVideo" download="LocalFrame-white-model.mp4" hidden>下载渲染后的 MP4</a></section><div id="status" role="status">请选择三维模型文件，或载入示例。左键旋转，右键平移，滚轮缩放。</div>
+<div id="viewport" aria-label="交互式三维白模预览"></div><p id="stats" class="hint">尚未载入模型</p>
+<section id="result" hidden><h2>AI 效果图</h2><p id="resultInfo" class="hint"></p><img id="resultImage" alt="AI 白模效果图"><a id="download" download="LocalFrame-AI-render.png">下载效果图</a></section>
+</section></main><script src="/last-settings.js"></script><script src="/white-model.bundle.js"></script><script src="/white-model-video.js"></script></body></html>

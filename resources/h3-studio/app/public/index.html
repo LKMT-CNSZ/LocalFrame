@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-src http://127.0.0.1:*">
+  <title>LocalFrame 影像创作</title>
+  <link rel="icon" href="/assets/localframe-logo.png" type="image/png">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <div class="shell">
+    <header class="topbar">
+      <div class="topbar-primary">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><img src="/assets/localframe-logo.png" alt=""></div>
+          <div>
+            <h1>LocalFrame <span>影像创作</span></h1>
+            <p>图片、视频、声音与后期，在一个空间完成</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <div class="system-pill" id="systemPill"><i></i><span>正在检测本地模型</span></div>
+          <button class="icon-button" id="openFolder" title="打开作品目录" aria-label="打开作品目录">
+            <svg viewBox="0 0 24 24"><path d="M3 7.5h7l2 2h9v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2.5"/></svg>
+          </button>
+        </div>
+      </div>
+      <nav class="edition-switch" aria-label="创作空间">
+        <button class="active" type="button" data-app-mode="basic"><b>快速创作</b><small>文字或图片生成视频</small></button>
+        <button type="button" data-app-mode="workflow"><b>项目制作</b><small>剧本到成片</small></button>
+        <button type="button" data-app-mode="local-image"><b>图片创作</b><small>本机模型与 API</small></button>
+        <button type="button" data-app-mode="white-model"><b>三维与转绘</b><small>白模预览与动画</small></button>
+        <button type="button" data-app-mode="post"><b>后期制作</b><small>配音与字幕</small></button>
+        <button type="button" data-app-mode="professional"><b>节点编辑</b><small>ComfyUI 工作流</small></button>
+      </nav>
+    </header>
+    <section class="workspace-intro" aria-live="polite">
+      <div><span class="intro-kicker" id="workspaceKicker">01 / 快速创作</span><h2 id="workspaceTitle">从一个想法开始</h2><p id="workspaceDescription">输入描述或参考图片，选择生成方式并查看进度；完成的作品保存在本机。</p></div>
+      <span class="intro-meta" id="workspaceMeta">视频创作</span>
+    </section>
+
+    <section class="hidden" id="whiteModelWorkspace" aria-label="白模渲染工作区"><iframe id="whiteModelFrame" title="白模三维预览与渲染" data-src="/white-model.html"></iframe></section>
+    <section class="hidden" id="localImageWorkspace" aria-label="本地图片生成工作区"><iframe id="localImageFrame" title="本地图片生成" data-src="/local-image.html"></iframe></section>
+    <main class="workspace" id="basicWorkspace">
+      <section class="panel controls-panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">CREATE</span><h2>创作设置</h2></div>
+          <span class="local-badge" id="creationMode">文生视频</span>
+        </div>
+
+        <div class="engine-picker" aria-label="生成方式"><div class="engine-section-label">本机生成 <span>素材保留在本机</span></div>
+          <button type="button" class="active" data-engine="int8">
+            <span><b>本地高画质</b><small>H3 INT8 · 本机生成</small></span><em>推荐</em>
+          </button>
+          <button type="button" data-engine="q2">
+            <span><b>低显存预览</b><small>H3 Q2 · 画质较低</small></span><em>预览</em>
+          </button>
+          <div class="engine-section-label">云端 API <span>需配置接口，可能计费</span></div>
+          <button type="button" data-engine="minimax">
+            <span><b>MiniMax 海螺</b><small>云端文生 / 图生视频</small></span><em>API</em>
+          </button>
+          <button type="button" data-engine="kling">
+            <span><b>可灵官方 API</b><small>已获接口权限时使用</small></span><em>API</em>
+          </button>
+          <button type="button" data-engine="jimeng">
+            <span><b>即梦官方 API</b><small>已获视觉服务权限时使用</small></span><em>API</em>
+          </button>
+          <button type="button" data-engine="doubao">
+            <span><b>豆包视频</b><small>Seedance 云端模型</small></span><em>API</em>
+          </button>
+          <div class="engine-section-label">网页协作 <span>在平台官网生成后接回作品</span></div>
+          <button type="button" data-engine="kling-platform">
+            <span><b>可灵平台协作</b><small>自动准备与接回 · 无需 API</small></span><em>推荐</em>
+          </button>
+          <button type="button" data-engine="jimeng-platform">
+            <span><b>即梦平台协作</b><small>自动准备与接回 · 无需 API</small></span><em>推荐</em>
+          </button>
+        </div>
+
+        <label class="field prompt-field">
+          <span class="field-title">视频提示词</span>
+          <textarea id="prompt" maxlength="4000" placeholder="描述主体、场景、镜头运动、光线，以及想听到的环境声、动作声或无歌词音乐……台词与字幕请在后期台加入。"></textarea>
+          <div class="prompt-footer">
+            <div class="prompt-tools">
+              <button class="text-button" id="examplePrompt">填入示例</button>
+              <button class="optimize-button" id="optimizePrompt" type="button"><span>✦</span> AI 优化提示词</button>
+            </div>
+            <span><b id="promptCount">0</b> / 4000</span>
+          </div>
+        </label>
+
+        <button class="provider-card" id="providerCard" type="button" title="配置提示词 API">
+          <div class="provider-icon">AI</div>
+          <div><strong>提示词优化接口</strong><span id="providerText">正在读取配置…</span></div>
+          <span class="provider-state" id="providerState">检测中</span>
+          <span class="provider-chevron">›</span>
+        </button>
+
+        <button class="provider-card video-provider-card" id="videoProviderCard" type="button" title="配置视频生成 API">
+          <div class="provider-icon">V</div>
+          <div><strong>视频模型提供商</strong><span id="videoProviderText">本地 H3 · 素材不上传</span></div>
+          <span class="provider-state" id="videoProviderState">本地</span>
+          <span class="provider-chevron">›</span>
+        </button>
+
+        <section class="director-card" id="directorCard">
+          <div class="director-head">
+            <div>
+              <span class="director-kicker">DIRECTOR WORKFLOW</span>
+              <strong>智能导演分镜</strong>
+              <small>自动拆镜 · 末帧续接 · 原生音频 · 自动合片</small>
+            </div>
+            <label class="switch" title="启用可编辑分镜">
+              <input id="directorMode" type="checkbox" checked>
+              <span></span>
+            </label>
+          </div>
+          <div class="director-actions">
+            <span id="storyboardSummary">10 秒 · 1 个镜头</span>
+            <button id="buildStoryboard" type="button"><i>✦</i> 自动拆解分镜</button>
+          </div>
+          <div class="storyboard-help" id="storyboardHelp">长片将按叙事阶段生成不同提示词；你可以在开始前逐镜头修改。</div>
+          <div class="storyboard-list" id="storyboardList"></div>
+        </section>
+
+        <div class="field">
+          <div class="field-title-row">
+            <span class="field-title">画面参考</span>
+            <span class="field-hint">可选</span>
+          </div>
+          <div class="upload-grid">
+            <label class="upload-card" id="firstCard">
+              <input type="file" id="firstImage" accept="image/png,image/jpeg,image/webp">
+              <img id="firstPreview" alt="首帧预览">
+              <div class="upload-empty">
+                <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="m4 16 5-5 4 4 2-2 5 5"/><circle cx="16.5" cy="8.5" r="1.5"/></svg>
+                <strong>添加首帧</strong><span>PNG / JPG / WebP</span>
+              </div>
+              <button type="button" class="remove-upload" data-target="first" aria-label="移除首帧">×</button>
+            </label>
+            <label class="upload-card" id="lastCard">
+              <input type="file" id="lastImage" accept="image/png,image/jpeg,image/webp">
+              <img id="lastPreview" alt="尾帧预览">
+              <div class="upload-empty">
+                <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="m4 16 5-5 4 4 2-2 5 5"/><circle cx="16.5" cy="8.5" r="1.5"/></svg>
+                <strong>添加尾帧</strong><span>需先添加首帧</span>
+              </div>
+              <button type="button" class="remove-upload" data-target="last" aria-label="移除尾帧">×</button>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-tabs" role="tablist">
+          <button class="active" type="button" data-pane="basicSettings">基础设置</button>
+          <button type="button" data-pane="advancedSettings">高级设置</button>
+        </div>
+
+        <div class="settings-grid settings-pane" id="basicSettings">
+          <label class="field compact resolution-field"><span class="field-title">画面尺寸</span>
+            <select id="resolution">
+              <option value="960x544">960 × 544 · 12GB 显存稳定档</option>
+              <option value="1152x640" selected>1152 × 640 · 横屏均衡画质</option>
+              <option value="1344x768">1344 × 768 · 横屏高画质</option>
+              <option value="544x960">544 × 960 · 竖屏稳定档</option>
+              <option value="640x1152">640 × 1152 · 竖屏均衡画质</option>
+              <option value="768x1344">768 × 1344 · 竖屏高画质</option>
+              <option value="1344x768@1920x1080">1920 × 1080 输出（内部 1344 × 768）</option>
+              <option value="768x1344@1080x1920">1080 × 1920 输出（内部 768 × 1344）</option>
+              <option value="1344x768@2560x1440">2560 × 1440 输出（内部 1344 × 768）</option>
+              <option value="768x1344@1440x2560">1440 × 2560 输出（内部 768 × 1344）</option>
+            </select>
+          </label>
+          <label class="field compact"><span class="field-title">时长</span>
+            <select id="duration">
+              <option value="2">约 2 秒 · 测试</option>
+              <option value="5">约 5 秒</option>
+              <option value="6">约 6 秒 · 云端常用</option>
+              <option value="10" selected>约 10 秒 · 单镜头</option>
+              <option value="15">约 15 秒 · 2 镜头续接</option>
+              <option value="20">约 20 秒 · 2 镜头续接</option>
+              <option value="30">约 30 秒 · 3 镜头续接</option>
+              <option value="45">约 45 秒 · 5 镜头导演模式</option>
+              <option value="60">约 60 秒 · 6 镜头完整工作流</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="settings-grid settings-pane hidden" id="advancedSettings">
+          <label class="field compact"><span class="field-title">采样步数</span>
+            <select id="steps">
+              <option value="4">4 步 · 快速预览</option>
+              <option value="6" selected>6 步 · 高质量推荐</option>
+              <option value="8">8 步 · 细节优先</option>
+              <option value="12">12 步 · 较慢</option>
+            </select>
+          </label>
+          <label class="field compact"><span class="field-title">随机种子</span>
+            <div class="seed-wrap"><input type="number" id="seed" min="0" max="2147483647" value="42"><button id="randomizeSeed" type="button" title="随机种子">↻</button></div>
+          </label>
+          <label class="field compact"><span class="field-title">二次画质修复</span>
+            <select id="enhancementMode">
+              <option value="none">关闭 · 保留原始生成</option>
+              <option value="lanczos">Lanczos 高清还原 · 非 AI</option>
+              <option value="realesrgan">Real-ESRGAN · AI 清晰修复</option>
+              <option value="flashvsr">FlashVSR · 视频扩散二次采样</option>
+            </select>
+          </label>
+          <label class="field compact"><span class="field-title">修复策略</span>
+            <select id="enhancementProfile"><option value="fast">快速 · 更省显存</option><option value="balanced" selected>均衡 · 推荐</option><option value="quality">细节优先 · 更慢</option></select>
+          </label>
+          <div class="advanced-note" id="enhancementNote"><strong>AI 修复默认关闭</strong><span>只在生成与合片完成后运行；FlashVSR 权重不会随主安装包下载，且不会与 H3 同时抢占显卡。</span></div>
+          <div class="advanced-note"><strong>12GB 显存高质量链路</strong><span>6–8 步会自动启用 SLA 0.85、首尾全注意力、全精度 QK 与参考帧保护；分块 FFN 和权重缓存全部位于所选模型盘。</span></div>
+        </div>
+
+        <div class="estimate" id="estimate">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <div><strong>预计负载：轻量</strong><span>12GB 显存低显存模式，权重从模型盘分阶段载入</span><small id="resolutionNote"></small></div>
+        </div>
+
+        <div class="generate-actions">
+          <button class="primary-button" id="generateButton">
+            <svg viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-13h-7z"/></svg>
+            <span>开始生成</span>
+          </button>
+          <button class="danger-button hidden" id="cancelButton">取消任务</button>
+        </div>
+      </section>
+
+      <section class="right-column">
+        <div class="panel stage-panel">
+          <div class="stage-empty" id="stageEmpty">
+            <div class="orb"><div></div><span>H3</span></div>
+            <h2>先生成纯画面，再加入准确声音</h2>
+            <p>输入创意，MiniMax H3 将在本机生成带原生立体声音轨的视频。</p>
+          </div>
+
+          <div class="stage-running hidden" id="stageRunning">
+            <div class="running-visual"><div class="scanline"></div><span>H3</span></div>
+            <div class="running-info">
+              <div class="running-title"><span id="phaseText">载入模型</span><b id="progressText">4%</b></div>
+              <div class="progress-track"><div id="progressBar"></div></div>
+              <div class="shot-progress-head"><span id="shotProgressText">当前镜头</span><b id="shotStepText">准备中</b></div>
+              <div class="shot-progress-track"><i id="shotProgressBar"></i></div>
+              <div class="running-meta"><span id="elapsedText">已用时 0:00</span><span id="jobSpec">512×320 · 39 帧 · 4 步</span></div>
+            </div>
+          </div>
+
+          <div class="stage-result hidden" id="stageResult">
+            <video id="resultVideo" controls playsinline></video>
+            <div class="result-overlay"><span>生成完成</span><button id="replayButton">重新播放</button></div>
+          </div>
+
+          <div class="stage-error hidden" id="stageError">
+            <div class="error-icon">!</div><h2>生成没有完成</h2><p id="errorMessage"></p><button class="secondary-button" id="retryButton">返回设置</button>
+          </div>
+        </div>
+
+        <div class="panel telemetry-panel">
+          <div class="telemetry-item"><span>GPU</span><strong id="gpuName">检测中</strong></div>
+          <div class="telemetry-divider"></div>
+          <div class="telemetry-item"><span>显存</span><strong id="gpuMemory">—</strong></div>
+          <div class="telemetry-divider"></div>
+          <div class="telemetry-item"><span>GPU 负载</span><strong id="gpuUsage">—</strong></div>
+          <div class="telemetry-divider"></div>
+          <div class="telemetry-item"><span>温度</span><strong id="gpuTemp">—</strong></div>
+        </div>
+
+        <div class="panel optimizer-panel" id="optimizerPanel">
+          <div class="optimizer-head">
+            <div><span class="eyebrow">SMART OPTIMIZER</span><h2>低算力优化中心</h2><p id="optimizerSummary">正在识别显卡、内存、CPU 与模型盘…</p></div>
+            <span class="recommend-chip" id="optimizerBadge">检测中</span>
+          </div>
+          <div class="hardware-grid">
+            <div><span>显卡 / 显存</span><strong id="hardwareGpu">—</strong></div>
+            <div><span>内存</span><strong id="hardwareRam">—</strong></div>
+            <div><span>处理器</span><strong id="hardwareCpu">—</strong></div>
+            <div><span>模型盘</span><strong id="hardwareDisk">—</strong></div>
+          </div>
+          <div class="recommendation-box">
+            <strong id="recommendationTitle">正在计算推荐方案</strong>
+            <p id="recommendationReasons"></p>
+            <small id="recommendationWarnings"></small>
+          </div>
+          <div class="memory-guard-banner">
+            <i></i><div><strong>显存防崩溃系统</strong><span>本地模型交接 · 长片分镜断点 · 4 级降载恢复 · 高清还原</span></div><em>自动保护</em>
+          </div>
+          <div class="optimizer-controls">
+            <label><span>优化方案</span><select id="optimizationPreset"><option value="auto">自动推荐</option></select></label>
+            <label><span>SLA 注意力</span><select id="slaMode"><option value="auto">随方案自动</option><option value="fast">0.90 极速稀疏</option><option value="quality">0.85 画质保护</option><option value="dense">关闭稀疏 / 全注意力</option></select></label>
+            <label><span>Spectrum 跳步</span><select id="spectrumMode"><option value="off">关闭 · 推荐</option></select></label>
+            <label><span>磁盘权重流送</span><select id="fastDisk"><option value="auto">自动检测 SSD</option><option value="on">强制启用</option><option value="off">关闭</option></select></label>
+          </div>
+          <div class="optimizer-foot"><span id="optimizerTradeoff">所有设置都会映射到真实运行参数；切换后本地引擎会自动重启。</span><button id="saveOptimization" type="button">应用推荐</button></div>
+        </div>
+
+        <div class="panel environment-panel" id="environmentPanel">
+          <div class="environment-head">
+            <div><span class="eyebrow">ONE-CLICK DEPLOYMENT</span><h2>H3 本地部署中心</h2><p id="environmentPath">正在读取安装位置…</p></div>
+            <div class="environment-actions"><button class="text-button" id="changeEnvironment">更改位置</button><button class="text-button" id="openEnvironment">打开目录</button><button class="install-button" id="installEnvironment">一键部署 H3</button></div>
+          </div>
+          <div class="deployment-summary">
+            <div><strong id="deploymentSummary">正在检测电脑环境…</strong><span>下载、独立 Python、运行库、模型和节点均由软件自动完成</span></div>
+            <label><span>部署方案</span><select id="deploymentPlan"><option value="auto">自动推荐</option><option value="h3_int8">H3 高质量 INT8</option></select></label>
+          </div>
+          <div class="deployment-check-grid" id="deploymentCheckGrid"></div>
+          <div class="install-progress hidden" id="installProgress"><div><span id="installPhase">准备安装</span><b id="installPercent">0%</b></div><i><em id="installBar"></em></i></div>
+          <div class="environment-error hidden" id="environmentError"></div>
+          <div class="component-grid" id="componentGrid"></div>
+          <details class="environment-log"><summary>安装日志与故障信息</summary><pre id="environmentLog">尚未开始部署</pre></details>
+          <p class="environment-note">高质量模型约下载 42GB，建议预留 65GB。支持断点续传；重复点击会校验并只修复缺失组件，不修改系统 Python。</p>
+        </div>
+
+        <div class="panel history-panel">
+          <div class="panel-heading history-heading">
+            <div><span class="eyebrow">LIBRARY</span><h2>本地作品</h2></div>
+            <div class="history-actions"><button class="text-button" id="toggleHistoryVisibility" aria-expanded="false">查看过往视频</button><button class="text-button hidden" id="toggleHistoryGroups">全部折叠</button><button class="text-button hidden" id="refreshHistory">刷新</button></div>
+          </div>
+          <div class="hidden" id="historyContent"><div class="history-grid" id="historyGrid"></div>
+          <div class="history-empty" id="historyEmpty">生成的视频会出现在这里</div></div>
+        </div>
+
+        <details class="panel log-panel" id="logPanel">
+          <summary><span>运行日志</span><span class="chevron">⌄</span></summary>
+          <pre id="logOutput">等待任务开始…</pre>
+        </details>
+      </section>
+    </main>
+
+    <main class="workflow-workspace hidden" id="workflowWorkspace">
+      <section class="workflow-hero panel">
+        <div>
+          <span class="eyebrow">STORY TO SCREEN · LOCAL PIPELINE</span>
+          <h2>从一个想法，到可交付成片</h2>
+          <p>本地编剧、角色与场景圣经、导演分镜、硬件生产计划和耐久渲染共用同一项目。每一步都能编辑、保存和恢复。</p>
+        </div>
+        <div class="workflow-hero-actions">
+          <button class="secondary-button" id="workflowNewProject" type="button">新建项目</button>
+          <button class="primary-button" id="workflowSaveProject" type="button">保存项目</button>
+        </div>
+      </section>
+
+      <div class="workflow-layout">
+        <aside class="workflow-sidebar panel">
+          <div class="workflow-sidebar-head"><div><span class="eyebrow">PROJECTS</span><h3>本地项目</h3></div><button class="text-button" id="workflowRefreshProjects" type="button">刷新</button></div>
+          <div class="workflow-project-list" id="workflowProjectList"></div>
+          <div class="workflow-project-empty" id="workflowProjectEmpty">还没有项目。点击“新建项目”开始。</div>
+          <nav class="workflow-steps" aria-label="全工作流阶段">
+            <button class="active" type="button" data-workflow-stage="workflowBrief"><i>1</i><span><b>创意简报</b><small>目标与交付规格</small></span></button>
+            <button type="button" data-workflow-stage="workflowScript"><i>2</i><span><b>剧本与圣经</b><small>本地 LLM 可生成</small></span></button>
+            <button type="button" data-workflow-stage="workflowCharacterModels"><i>3</i><span><b>角色定妆</b><small>三视图确认模型</small></span></button>
+            <button type="button" data-workflow-stage="workflowStoryboard"><i>4</i><span><b>导演分镜</b><small>镜头可逐条编辑</small></span></button>
+            <button type="button" data-workflow-stage="workflowPlan"><i>5</i><span><b>生产计划</b><small>按硬件自动推荐</small></span></button>
+            <button type="button" data-workflow-stage="workflowProduction"><i>6</i><span><b>生成与交付</b><small>断点恢复耐久渲染</small></span></button>
+          </nav>
+        </aside>
+
+        <section class="workflow-content">
+          <section class="workflow-section panel" id="workflowBrief">
+            <div class="workflow-section-head"><div><span class="step-kicker">STEP 01</span><h2>创意简报</h2><p>先规定故事目标和交付规格，后续所有内容都会保存在当前项目。</p></div><span class="workflow-state" id="workflowSaveState">未保存</span></div>
+            <div class="workflow-form-grid">
+              <label class="workflow-field span-2"><span>项目名称</span><input id="workflowTitle" maxlength="80" placeholder="例如：雨夜归途"></label>
+              <label class="workflow-field span-2"><span>核心创意</span><textarea id="workflowIdea" maxlength="8000" placeholder="用几句话说明人物、目标、冲突、场景和想要的结尾……"></textarea></label>
+              <label class="workflow-field"><span>单集时长</span><select id="workflowDuration"><option value="30">30 秒 · 超短集</option><option value="60">1 分钟</option><option value="90">1 分 30 秒</option><option value="120" selected>2 分钟 · 短剧推荐</option><option value="180">3 分钟</option><option value="300">5 分钟</option><option value="480">8 分钟</option><option value="600">10 分钟</option><option value="900">15 分钟</option></select></label>
+              <label class="workflow-field"><span>画幅</span><select id="workflowAspect"><option value="16:9">16:9 横屏</option><option value="9:16">9:16 竖屏</option><option value="1:1">1:1 方形</option></select></label>
+              <label class="workflow-field"><span>视觉风格</span><input id="workflowStyle" maxlength="500" value="电影感写实" placeholder="电影感写实、动画、纪录片……"></label>
+              <label class="workflow-field"><span>目标观众</span><input id="workflowAudience" maxlength="500" placeholder="例如：短视频平台年轻观众"></label>
+              <label class="workflow-check"><input id="workflowDialogue" type="checkbox" checked><span></span><b>剧本需要对白（后期生成）</b></label>
+              <label class="workflow-field"><span>交付画质</span><select id="workflowDelivery"><option value="1080p">1080p 高清母版</option><option value="2k">2K · 2560×1440 / 1440×2560</option><option value="native">H3 原生渲染尺寸</option></select></label>
+            </div>
+          </section>
+
+          <section class="workflow-section panel" id="workflowScript">
+            <div class="workflow-section-head"><div><span class="step-kicker">STEP 02</span><h2>剧本与制作圣经</h2><p>优先使用已连接的本地大语言模型；接口不可用时自动生成可编辑的离线导演稿。</p></div><button class="workflow-action" id="workflowGenerateScript" type="button">✦ 生成完整制作包</button></div>
+            <div class="workflow-source" id="workflowScriptSource">等待生成 · 可在任意文本框中直接修改</div>
+            <div class="workflow-form-grid script-grid">
+              <label class="workflow-field span-2"><span>一句话梗概</span><textarea id="workflowLogline" class="short" maxlength="1200"></textarea></label>
+              <label class="workflow-field"><span>故事大纲</span><textarea id="workflowOutline" maxlength="12000"></textarea></label>
+              <label class="workflow-field"><span>可拍摄剧本</span><textarea id="workflowScreenplay" maxlength="24000"></textarea></label>
+              <label class="workflow-field"><span>人物圣经</span><textarea id="workflowCharacters" maxlength="12000"></textarea></label>
+              <label class="workflow-field"><span>场景圣经</span><textarea id="workflowLocations" maxlength="12000"></textarea></label>
+              <label class="workflow-field"><span>视觉连续性规则</span><textarea id="workflowVisualRules" maxlength="8000"></textarea></label>
+              <label class="workflow-field"><span>声音连续性规则</span><textarea id="workflowAudioRules" maxlength="8000"></textarea></label>
+            </div>
+          </section>
+
+          <section class="workflow-section panel" id="workflowCharacterModels">
+            <div class="workflow-section-head"><div><span class="step-kicker">STEP 03</span><h2>角色三视图与定妆模型</h2><p>为主要角色上传正面、侧面和背面全身参考图。确认后，这套外观会成为后续分镜的人物连续性基准；图片只保存在当前电脑。</p></div><button class="workflow-action" id="workflowAddCharacter" type="button">＋ 添加角色</button></div>
+            <div class="character-model-notice"><i>3-VIEW LOCK</i><span>建议三张图使用相同服装、发型、光线与纯净背景，并保持完整头身比例。替换任何一张图片后需要重新确认。</span></div>
+            <div class="character-model-list" id="workflowCharacterModelList"><div class="workflow-placeholder">先保存项目，再添加第一位角色的三视图。</div></div>
+          </section>
+
+          <section class="workflow-section panel" id="workflowStoryboard">
+            <div class="workflow-section-head"><div><span class="step-kicker">STEP 04</span><h2>短剧导演分镜</h2><p>整集按 12 镜头一批规划，单镜头不超过 10 秒；已确认的角色三视图会作为人物定妆基准，服装、道具、光线、运动方向和声音规则保持连续。</p></div><button class="workflow-action" id="workflowBuildStoryboard" type="button">生成整集分镜</button></div>
+            <div class="workflow-storyboard" id="workflowStoryboardList"><div class="workflow-placeholder">完成剧本后生成可编辑分镜。</div></div>
+          </section>
+
+          <section class="workflow-section panel" id="workflowPlan">
+            <div class="workflow-section-head"><div><span class="step-kicker">STEP 05</span><h2>硬件生产计划</h2><p>自动识别显卡、显存、内存、CPU 和模型环境，低显存设备会用更长时间换取可交付画质。</p></div><button class="workflow-action" id="workflowBuildPlan" type="button">分析并生成计划</button></div>
+            <div class="workflow-generation-controls">
+              <label class="workflow-field"><span>内部生成画质</span><select id="workflowGenerationQuality"><option value="auto">自动推荐</option><option value="draft">快速预览 · 768 档</option><option value="balanced">均衡成片 · 960 档</option><option value="quality">高画质 · 1152 档</option><option value="ultra">极致画质 · 1344 档</option></select></label>
+              <label class="workflow-field"><span>采样步数</span><select id="workflowGenerationSteps"><option value="0">随画质自动</option><option value="4">4 步 · 最快</option><option value="6">6 步 · 均衡</option><option value="8">8 步 · 细节</option><option value="10">10 步 · 高画质</option><option value="12">12 步 · 极致</option></select></label>
+              <label class="workflow-field"><span>自动分镜时长</span><select id="workflowShotSeconds"><option value="3">约 3 秒 · 动作快切</option><option value="4">约 4 秒 · 短镜头</option><option value="5" selected>约 5 秒 · 推荐</option><option value="6">约 6 秒</option><option value="8">约 8 秒</option><option value="10">约 10 秒 · 长镜头</option></select></label>
+              <label class="workflow-field"><span>镜头衔接方式</span><select id="workflowContinuity"><option value="cut">独立短分镜 · 防重复</option><option value="carry">末帧续接 · 连续运动</option></select></label>
+              <label class="workflow-field"><span>生成阶段声音</span><select id="workflowAudioMode"><option value="silent">纯画面无音轨 · 杜绝人物念台词</option><option value="ambience">环境声 · 强制禁人声</option></select></label>
+              <label class="workflow-field"><span>二次画质修复</span><select id="workflowEnhancementMode"><option value="none">关闭 · 保留原始生成</option><option value="lanczos">Lanczos 高清还原 · 非 AI</option><option value="realesrgan">Real-ESRGAN · AI 清晰修复</option><option value="flashvsr">FlashVSR · 视频扩散二次采样</option></select></label>
+              <label class="workflow-field"><span>修复策略</span><select id="workflowEnhancementProfile"><option value="fast">快速 · 更省显存</option><option value="balanced" selected>均衡 · 推荐</option><option value="quality">细节优先 · 更慢</option></select></label>
+              <p id="workflowEnhancementNote">“独立短分镜”会逐镜头单独采样，再优先使用 FFmpeg 流复制无损合并，避免动作重复。AI 二次修复只在整片完成后显式运行；Lanczos 只是插值，FlashVSR 才是视频扩散二次采样。</p>
+            </div>
+            <div class="workflow-plan" id="workflowPlanContent"><div class="workflow-placeholder">完成分镜后生成设备专属计划。</div></div>
+          </section>
+
+          <section class="workflow-section workflow-production panel" id="workflowProduction">
+            <div class="workflow-section-head"><div><span class="step-kicker">STEP 06</span><h2>生成与交付</h2><p>先卸载同机文字模型，再逐镜头生成、校验和缓存；中断后自动复用已完成镜头。</p></div><div class="workflow-production-actions"><button class="secondary-button" id="workflowPrepareEnvironment" type="button">准备生成环境</button><button class="primary-button" id="workflowStartProduction" type="button">开始生产成片</button></div></div>
+            <div class="workflow-progress-card" id="workflowProgressCard">
+              <div class="workflow-progress-copy"><i></i><div><strong id="workflowProgressTitle">等待开始生产</strong><span id="workflowProgressText">项目、分镜和生产计划都会保存在本机</span></div><b id="workflowProgressPercent">0%</b></div>
+              <div class="workflow-progress-track"><i id="workflowProgressBar"></i></div>
+              <div class="workflow-shot-progress-head"><span id="workflowShotProgressText">当前镜头</span><b id="workflowShotStepText">等待采样</b></div>
+              <div class="workflow-shot-progress-track"><i id="workflowShotProgressBar"></i></div>
+              <div class="workflow-progress-meta" id="workflowProgressMeta">独立短分镜 · 无损合片 · 4 级降载 · 断点恢复</div>
+              <video class="workflow-result hidden" id="workflowResultVideo" controls playsinline></video>
+              <details class="workflow-log"><summary>生产日志</summary><pre id="workflowProductionLog">等待任务开始…</pre></details>
+            </div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <main class="post-workspace hidden" id="postWorkspace">
+      <section class="post-hero panel">
+        <div><span class="eyebrow">POST PRODUCTION · LOCAL</span><h2>台词字幕后期台与 Voice Studio</h2><p>视频模型只生成画面与环境声；准确台词、说话人、中文配音和字幕在本机后期生成并加入。</p></div>
+        <span class="local-badge">完全本地</span>
+      </section>
+
+      <div class="post-grid">
+        <section class="post-panel panel">
+          <div class="post-panel-head"><div><span class="step-kicker">SCRIPT TIMELINE</span><h2>AI 台词与多角色声音轴</h2><p>读取实际成片时长，由 AI 生成精确到秒的台词、说话人和声线；所有配音与字幕都在这里后期烧录。</p></div><button class="secondary-button" id="editorRefresh" type="button">刷新素材</button></div>
+          <div class="post-form-grid">
+            <label class="workflow-field"><span>选择视频</span><select id="editorVideoSelect"><option value="">等待读取本地作品…</option></select></label>
+            <label class="workflow-field"><span>关联剧本项目</span><select id="editorProjectSelect"><option value="">手动粘贴剧本</option></select></label>
+            <label class="workflow-field span-2"><span>剧本 / 故事内容</span><textarea id="editorScreenplay" maxlength="60000" placeholder="可粘贴完整剧本、故事大纲或对白。AI 会按所选成片的真实秒数生成台词时间轴。"></textarea></label>
+          </div>
+          <div class="editor-toolbar">
+            <label class="api-switch"><input id="editorIncludeSpeaker" type="checkbox" checked><span></span>对白显示说话人</label>
+            <label class="api-switch"><input id="editorAddVoice" type="checkbox" checked><span></span>同步生成配音并混入环境声</label>
+            <label class="workflow-field compact"><span>默认台词声线</span><select id="editorVoiceProfile"></select></label>
+            <button class="workflow-action" id="editorExtract" type="button">✦ AI 按成片秒数生成</button>
+            <button class="text-button" id="editorAddCue" type="button">＋ 手动添加</button>
+          </div>
+          <div class="workflow-timeline-state" id="editorTimelineState">请选择视频与剧本，再由 AI 生成对应到秒的台词轴</div>
+          <div class="workflow-timeline editor-timeline" id="editorCueList"><div class="workflow-placeholder">AI 生成后，可逐条修改开始秒数、结束秒数、说话人、台词和角色声线。</div></div>
+          <div class="subtitle-style-grid">
+            <label class="workflow-field"><span>字号</span><input id="editorFontSize" type="number" min="24" max="96" value="52"></label>
+            <label class="workflow-field"><span>底部距离</span><input id="editorMargin" type="number" min="30" max="360" value="78"></label>
+            <label class="workflow-field"><span>字幕颜色</span><input id="editorColor" type="color" value="#ffffff"></label>
+            <label class="workflow-field"><span>背景不透明度（0% 为全透明）</span><input id="editorBackground" type="range" min="0" max="0.9" step="0.05" value="0"></label>
+          </div>
+          <div class="post-actions"><span id="editorState">尚未生成后期成片</span><a class="text-button hidden" id="editorSubtitleDownload" download>下载 SRT</a><button class="primary-button" id="editorRender" type="button">一键生成配音并烧录字幕</button></div>
+          <video class="post-video hidden" id="editorPreviewVideo" controls playsinline></video>
+        </section>
+
+        <section class="post-panel panel voice-studio-panel">
+          <div class="post-panel-head"><div><span class="step-kicker">VOICE STUDIO</span><h2>后期配音模块</h2><p>22 种情境声线，加上可调表达指令、语速、停顿与韵律。设置完成后回到左侧一键烧录整条声音轴。</p></div><div class="voice-studio-status-actions"><span id="voiceStudioStatus">正在检测语音引擎…</span><button class="secondary-button" id="voiceStudioInstall" type="button">一键安装语音模型</button></div></div>
+          <div class="voice-install-progress hidden" id="voiceStudioInstallProgress"><i id="voiceStudioInstallBar"></i><span id="voiceStudioInstallText">等待安装</span></div>
+          <div class="voice-studio-grid" id="voiceStudioGrid"></div>
+          <div class="voice-clone-panel">
+            <div class="voice-clone-head"><div><b>上传我的声音</b><span>5–30 秒清晰单人干声效果最佳；仅在本机做零样本声音复刻，不上传网络。</span></div><em>LOCAL CLONE</em></div>
+            <div class="voice-clone-grid">
+              <label class="workflow-field"><span>声音名称</span><input id="voiceCloneName" maxlength="48" placeholder="例如：小满角色音"></label>
+              <label class="workflow-field"><span>参考音频</span><input id="voiceCloneFile" type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/flac"></label>
+              <label class="workflow-field span-2"><span>参考音频逐字稿</span><textarea class="short" id="voiceCloneTranscript" maxlength="1000" placeholder="准确填写参考音频中说出的文字，复刻效果会更稳定。"></textarea></label>
+            </div>
+            <div class="voice-clone-actions"><span id="voiceCloneState">需要使用本人声音或已获得声音权利人的授权</span><button class="secondary-button" id="voiceCloneCreate" type="button">保存为本地声线</button></div>
+          </div>
+          <label class="workflow-field"><span>试听文字</span><textarea id="voiceStudioText" maxlength="2000">这不是一段标准播音。我想像朋友一样，把眼前发生的故事慢慢讲给你听。</textarea></label>
+          <label class="workflow-field"><span>自定义表达方式</span><textarea class="short" id="voiceStudioInstruction" maxlength="340" placeholder="例如：刚跑上楼，轻微喘息，但努力压低声音。"></textarea></label>
+          <div class="voice-control-grid">
+            <label><span>语速 <b id="voiceSpeedValue">1.00</b></span><input id="voiceSpeed" type="range" min="0.75" max="1.30" step="0.01" value="1"></label>
+            <label><span>停顿 <b id="voicePauseValue">1.00</b></span><input id="voicePause" type="range" min="0.70" max="1.40" step="0.01" value="1"></label>
+            <label><span>韵律变化 <b id="voiceVariationValue">0.008</b></span><input id="voiceVariation" type="range" min="0" max="0.02" step="0.001" value="0.008"></label>
+          </div>
+          <div class="post-actions"><span id="voiceStudioSelection">请选择声线</span><button class="secondary-button" id="voiceStudioSave" type="button">设为默认</button><button class="primary-button" id="voiceStudioPreview" type="button">生成试听</button></div>
+          <audio class="voice-studio-audio hidden" id="voiceStudioAudio" controls></audio>
+          <p class="post-note">新版会保持短段语音连续合成，只在长文本需要换气时分段；不再对每个句子强制重启声线。</p>
+        </section>
+      </div>
+    </main>
+
+    <main class="professional-workspace hidden" id="professionalWorkspace">
+      <section class="professional-hero panel">
+        <div>
+          <span class="eyebrow">PROFESSIONAL · COMFYUI</span>
+          <h2>ComfyUI 节点编辑</h2>
+          <p>自由连接节点、导入工作流、管理模型与自定义节点。与快速创作共用模型和显存优化设置。</p>
+        </div>
+        <div class="professional-actions">
+          <button class="secondary-button" id="refreshProfessional" type="button">刷新状态</button>
+          <button class="primary-button professional-start" id="startProfessional" type="button">一键安装并打开</button>
+        </div>
+      </section>
+
+      <section class="professional-status panel" id="professionalStatusCard">
+        <div class="professional-status-head">
+          <div class="professional-status-copy"><i></i><div><strong id="professionalStatusTitle">正在检测节点环境</strong><span id="professionalStatusText">检查 ComfyUI、模型与自定义节点…</span></div></div>
+          <span id="professionalPercent">0%</span>
+        </div>
+        <div class="professional-progress"><i id="professionalBar"></i></div>
+        <div class="professional-feature-grid" id="professionalFeatures"></div>
+        <details class="professional-log"><summary>安装与启动日志</summary><pre id="professionalLog">等待操作…</pre></details>
+      </section>
+
+      <section class="comfy-frame-panel panel hidden" id="comfyFramePanel">
+        <div class="comfy-frame-head">
+          <div><strong>ComfyUI</strong><span id="comfyAddress">http://127.0.0.1:8188</span></div>
+          <button class="secondary-button" id="reloadComfy" type="button">重新载入工作台</button>
+        </div>
+        <iframe id="comfyFrame" title="ComfyUI 节点画布" allow="clipboard-read; clipboard-write"></iframe>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="providerModal" role="dialog" aria-modal="true" aria-labelledby="providerModalTitle">
+    <form class="api-modal" id="providerForm">
+      <div class="api-modal-head">
+        <div><span class="eyebrow">API CONNECTION</span><h2 id="providerModalTitle">连接提示词模型</h2><p>自动识别 FreeToken、LM Studio、Ollama、vLLM、LocalAI 和 llama.cpp，也可接入云端 API。</p></div>
+        <button class="modal-close" id="closeProvider" type="button" aria-label="关闭">×</button>
+      </div>
+      <section class="local-provider-discovery">
+        <div class="local-provider-copy">
+          <span class="freetoken-badge">FREETOKEN READY</span>
+          <strong>一键发现本机提示词服务</strong>
+          <p>扫描常用本地端口并读取已加载模型，不上传密钥和提示词。FreeToken 尚未运行时会保持预留状态。</p>
+        </div>
+        <button id="detectLocalProviders" type="button">自动识别本地服务</button>
+      </section>
+      <label class="api-field discovery-picker hidden" id="providerDiscoveryPicker"><span>检测到的服务 <small id="providerDiscoverySummary"></small></span>
+        <select id="detectedProvider"></select>
+      </label>
+      <label class="api-field"><span>快速配置</span>
+        <select id="providerPreset">
+          <option value="custom">自定义 OpenAI 兼容接口</option>
+          <option value="freetoken">FreeToken 本地网关（预留）</option>
+          <option value="openai">OpenAI</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="ollama">Ollama 本地模型</option>
+          <option value="lmstudio">LM Studio 本地模型</option>
+        </select>
+      </label>
+      <div class="api-grid">
+        <label class="api-field span-2"><span>API 地址</span><input id="providerBaseUrl" type="text" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
+        <label class="api-field span-2"><span>模型名称 <small>检测后可直接选择</small></span><input id="providerModel" type="text" list="providerModels" spellcheck="false" placeholder="例如 gpt-5-mini 或本地模型名称"><datalist id="providerModels"></datalist></label>
+        <label class="api-field"><span>接口模式</span>
+          <select id="providerEndpointMode"><option value="auto">自动识别</option><option value="chat-completions">Chat Completions</option><option value="responses">Responses API</option><option value="ollama">Ollama /api/chat</option></select>
+        </label>
+        <label class="api-field"><span>鉴权方式</span>
+          <select id="providerAuthMode"><option value="bearer">Bearer Token</option><option value="x-api-key">x-api-key</option><option value="none">无需密钥</option></select>
+        </label>
+        <label class="api-field span-2"><span>API 密钥 <small id="providerKeyHint">留空则保留已保存的密钥</small></span><input id="providerApiKey" type="password" autocomplete="off" placeholder="sk-…"></label>
+      </div>
+      <label class="api-switch"><input id="providerEnabled" type="checkbox" checked><span></span><b>启用 AI 提示词优化和智能分镜</b></label>
+      <div class="api-test-state" id="providerTestState">配置仅保存在这台电脑；只有主动使用 AI 功能时才会发送提示词。</div>
+      <div class="api-actions"><button class="api-secondary" id="testProvider" type="button">测试连接</button><button class="api-primary" id="saveProvider" type="submit">保存并启用</button></div>
+    </form>
+  </div>
+  <div class="modal-backdrop hidden" id="videoProviderModal" role="dialog" aria-modal="true" aria-labelledby="videoProviderModalTitle">
+    <form class="api-modal" id="videoProviderForm">
+      <div class="api-modal-head">
+        <div><span class="eyebrow">VIDEO PROVIDERS</span><h2 id="videoProviderModalTitle">选择视频生成方式</h2><p>可灵和即梦支持无需 API 的平台协作；已有官方接口权限时也可继续使用全自动 API。</p></div>
+        <button class="modal-close" id="closeVideoProvider" type="button" aria-label="关闭">×</button>
+      </div>
+      <label class="api-field"><span>视频提供商</span>
+        <select id="videoProviderPreset">
+          <option value="minimax">MiniMax 海螺</option>
+          <option value="kling-platform">可灵平台协作（无需 API）</option>
+          <option value="jimeng-platform">即梦平台协作（无需 API）</option>
+          <option value="kling">可灵官方 API</option>
+          <option value="jimeng">即梦官方 API</option>
+          <option value="doubao">豆包视频</option>
+        </select>
+      </label>
+      <section class="platform-provider-info hidden" id="platformProviderInfo">
+        <strong>无需填写密钥</strong>
+        <p>开始后会自动复制当前镜头提示词、整理参考图并打开官网。正常下载生成视频后，LocalFrame 会自动识别、接回并继续后期。</p>
+      </section>
+      <div class="api-grid" id="videoApiConfig">
+        <label class="api-field span-2"><span>API 地址</span><input id="videoProviderBaseUrl" type="text" spellcheck="false"></label>
+        <label class="api-field span-2"><span>模型或推理接入点 ID <small>可从探测结果选择，也可手动填写</small></span><input id="videoProviderModel" type="text" list="videoProviderModels" spellcheck="false"><datalist id="videoProviderModels"></datalist></label>
+        <label class="api-field span-2"><span>模型原生输出画质 <small id="videoNativeResolutionHint">按模型能力联动，不做后处理冒充原生</small></span><select id="videoNativeResolution"></select></label>
+        <label class="api-field span-2" id="videoApiKeyField"><span>API Key <small id="videoApiKeyHint">留空则保留已保存的密钥</small></span><input id="videoProviderApiKey" type="password" autocomplete="new-password" placeholder="仅保存在本机用户目录"></label>
+        <label class="api-field" id="videoAccessKeyField"><span>Access Key</span><input id="videoProviderAccessKey" type="password" autocomplete="new-password" placeholder="可灵 Access Key"></label>
+        <label class="api-field" id="videoSecretKeyField"><span>Secret Key</span><input id="videoProviderSecretKey" type="password" autocomplete="new-password" placeholder="可灵 Secret Key"></label>
+      </div>
+      <label class="api-switch" id="videoProviderSwitch"><input id="videoProviderEnabled" type="checkbox" checked><span></span><b>启用此云端视频提供商</b></label>
+      <section class="video-capabilities" id="videoCapabilities"></section>
+      <div class="api-test-state" id="videoProviderTestState">密钥不会回传前端或写入任务历史；参考图和提示词仅在确认生成后发送给所选厂商。</div>
+      <div class="api-actions"><button class="api-secondary" id="testVideoProvider" type="button">识别服务与模型</button><button class="api-primary" id="saveVideoProvider" type="submit">保存并选择</button></div>
+    </form>
+  </div>
+  <aside class="platform-handoff-bar hidden" id="platformHandoffBar" aria-live="polite">
+    <div class="platform-handoff-copy">
+      <span>平台协作</span>
+      <strong id="platformHandoffTitle">正在准备当前镜头</strong>
+      <small id="platformHandoffText">提示词会自动复制，下载后自动接回</small>
+    </div>
+    <div class="platform-handoff-actions">
+      <button type="button" id="platformCopyPrompt">复制提示词</button>
+      <button type="button" id="platformOpenAssets">查看参考图</button>
+      <button type="button" id="platformOpenSite">打开平台</button>
+      <button class="primary" type="button" id="platformChooseVideo">已下载，立即接回</button>
+    </div>
+  </aside>
+  <div class="toast" id="toast"></div>
+  <dialog class="delete-dialog" id="deleteVideoDialog" aria-labelledby="deleteVideoTitle">
+    <h2 id="deleteVideoTitle">删除视频作品？</h2>
+    <p>将从本机作品目录永久删除这个视频，删除后无法恢复。</p>
+    <div class="delete-dialog-actions"><button type="button" id="cancelVideoDelete">取消</button><button type="button" class="confirm-delete" id="confirmVideoDelete">确定删除</button></div>
+  </dialog>
+  <script src="/last-settings.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'">
+  <title>LocalFrame 影像创作</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="grain"></div>
+  <header>
+    <div class="brand"><img class="brand-mark" src="localframe-logo.png" alt=""><span>LOCALFRAME</span></div>
+    <div class="offline"><i></i> 本地模式 · 数据不会离开此电脑</div>
+  </header>
+
+  <main>
+    <section id="scanView" class="view active">
+      <div class="eyebrow">FIRST RUN · 首次启动向导</div>
+      <h1>把复杂的配置，<br><em>留给软件。</em></h1>
+      <p class="lead">自动识别显卡与显存，选择经过测试的模型配置。无需命令行、Python 或手动调参。</p>
+      <div id="scanCard" class="scan-card">
+        <div class="radar"><div></div><span>GPU</span></div>
+        <div class="scan-copy">
+          <small>正在检查这台电脑</small>
+          <strong id="scanTitle">读取硬件信息…</strong>
+          <span id="scanDetail">通常只需要几秒钟</span>
+        </div>
+        <div id="scanState" class="scan-state pulse">检测中</div>
+      </div>
+      <button id="continueButton" class="primary" disabled>继续设置 <span>→</span></button>
+    </section>
+
+    <section id="resultView" class="view">
+      <button class="back" data-back>← 返回</button>
+      <div class="eyebrow">HARDWARE PROFILE · 硬件方案</div>
+      <h2>已经为你配好了。</h2>
+      <p class="lead small">这是根据本机硬件自动选择的稳定方案，安装后仍可在高级设置中修改。</p>
+      <div class="result-grid">
+        <article class="device-card accent">
+          <div class="card-label">首选计算设备</div>
+          <div class="device-icon">◫</div>
+          <h3 id="gpuName">—</h3>
+          <p id="gpuMeta">—</p>
+          <span class="recommended">已选择</span>
+        </article>
+        <article class="device-card">
+          <div class="card-label">优化配置</div>
+          <div class="profile-row"><span>运行模式</span><strong id="profileName">—</strong></div>
+          <div class="profile-row"><span>默认画面</span><strong id="profileResolution">—</strong></div>
+          <div class="profile-row"><span>计算精度</span><strong id="profilePrecision">—</strong></div>
+          <div class="profile-row"><span>系统内存</span><strong id="memoryValue">—</strong></div>
+        </article>
+      </div>
+      <div id="packNotice" class="notice hidden"></div>
+      <button id="installButton" class="primary wide">一键准备本地环境 <span>→</span></button>
+      <p class="footnote">全程离线 · 不修改系统 Python · 不上传提示词与作品</p>
+    </section>
+
+    <section id="installView" class="view">
+      <div class="install-shell">
+        <div class="orbit"><span></span><b>LF</b></div>
+        <div class="eyebrow">LOCAL SETUP · 本地初始化</div>
+        <h2 id="installTitle">正在准备创作环境</h2>
+        <p id="installLabel">创建独立工作区…</p>
+        <div class="progress-track"><div id="progressBar"></div></div>
+        <div class="progress-meta"><span id="progressPercent">0%</span><span>可安全关闭，重新打开后会继续</span></div>
+        <div id="installError" class="error hidden"></div>
+        <button id="retryButton" class="secondary hidden">重新尝试</button>
+      </div>
+    </section>
+
+    <section id="readyView" class="view">
+      <nav class="side">
+        <div class="brand vertical"><img class="brand-mark" src="localframe-logo.png" alt=""></div>
+        <button class="nav-icon active" title="创作">✦</button>
+        <button id="openOutputs" class="nav-icon" title="作品目录">▣</button>
+        <div class="spacer"></div>
+        <button class="nav-icon" title="设置">⚙</button>
+      </nav>
+      <div class="studio">
+        <div class="studio-head">
+          <div><div class="eyebrow">CREATE · 文生视频</div><h2>开始一段新画面</h2></div>
+          <div class="ready-chip"><i></i><span id="readyProfile">本地引擎就绪</span></div>
+        </div>
+        <div class="canvas-placeholder">
+          <div class="empty-mark">✦</div>
+          <strong>你的作品会在这里出现</strong>
+          <span>输入画面描述，LocalFrame 会使用本机算力生成</span>
+        </div>
+        <div class="composer">
+          <textarea placeholder="描述你想看到的画面，例如：清晨的薄雾穿过竹林，镜头缓慢向前移动…"></textarea>
+          <div class="composer-footer">
+            <div class="pills"><button>16:9</button><button>5 秒</button><button id="qualityPill">均衡</button></div>
+            <button id="generateButton" class="generate">生成视频 <span>⌘ ↵</span></button>
+          </div>
+        </div>
+        <div id="runtimeHint" class="runtime-hint hidden"></div>
+      </div>
+    </section>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>
