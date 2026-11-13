@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self' blob: data:; object-src 'none'">
-<title>LocalFrame 白模渲染</title><link rel="stylesheet" href="/white-model.css"></head>
+<title>LocalFrame 白模渲染</title><link rel="stylesheet" href="/white-model.css"><link rel="stylesheet" href="/prompt-memory.css"></head>
 <body><main class="studio">
 <aside class="settings"><span class="eyebrow">WHITE MODEL STUDIO</span><h1>白模渲染</h1>
 <p class="muted">导入白模视频，保留原动作与镜头，在本机改写材质和画风。</p>
@@ -40,4 +40,4 @@
 <section class="stage"><section id="videoStage"><h2>视频预览与结果</h2><video id="sourceVideo" controls playsinline hidden></video><div id="videoStatus" role="status">请选择白模视频。</div><progress id="videoProgress" max="100" value="0" hidden></progress><video id="renderedVideo" controls playsinline hidden></video><a id="downloadVideo" download="LocalFrame-white-model.mp4" hidden>下载渲染后的 MP4</a></section><div id="status" role="status">请选择三维模型文件，或载入示例。左键旋转，右键平移，滚轮缩放。</div>
 <div id="viewport" aria-label="交互式三维白模预览"></div><p id="stats" class="hint">尚未载入模型</p>
 <section id="result" hidden><h2>AI 效果图</h2><p id="resultInfo" class="hint"></p><img id="resultImage" alt="AI 白模效果图"><a id="download" download="LocalFrame-AI-render.png">下载效果图</a></section>
-</section></main><script src="/last-settings.js"></script><script src="/white-model.bundle.js"></script><script src="/white-model-video.js"></script></body></html>
+</section></main><script src="/last-settings.js"></script><script src="/prompt-memory.js"></script><script src="/white-model.bundle.js"></script><script src="/white-model-video.js"></script></body></html>

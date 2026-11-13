@@ -7,6 +7,7 @@
   <title>LocalFrame 影像创作</title>
   <link rel="icon" href="/assets/localframe-logo.png" type="image/png">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/prompt-memory.css">
 </head>
 <body>
   <div class="ambient ambient-a"></div>
@@ -58,6 +59,9 @@
           <button type="button" data-engine="q2">
             <span><b>低显存预览</b><small>H3 Q2 · 画质较低</small></span><em>预览</em>
           </button>
+          <button type="button" data-engine="remote-h3">
+            <span><b>云端 GPU · H3</b><small>SSH 隧道连接 · 算力按平台计费</small></span><em>远程</em>
+          </button>
           <div class="engine-section-label">云端 API <span>需配置接口，可能计费</span></div>
           <button type="button" data-engine="minimax">
             <span><b>MiniMax 海螺</b><small>云端文生 / 图生视频</small></span><em>API</em>
@@ -78,6 +82,16 @@
           <button type="button" data-engine="jimeng-platform">
             <span><b>即梦平台协作</b><small>自动准备与接回 · 无需 API</small></span><em>推荐</em>
           </button>
+        </div>
+        <div class="field compact hidden" id="remoteH3Connection">
+          <span class="field-title">GPUHome SSH 连接</span>
+          <input id="remoteH3Host" placeholder="SSH 主机地址">
+          <input id="remoteH3SshPort" type="number" min="1" max="65535" value="22" placeholder="SSH 端口">
+          <input id="remoteH3User" value="root" placeholder="SSH 用户名">
+          <span class="field-title">云端 SSH 隧道本机端口</span>
+          <input id="remoteH3Port" type="number" min="1024" max="65535" value="18189">
+          <button id="remoteH3Connect" type="button">打开 SSH 连接窗口</button>
+          <span class="field-hint">在 SSH 窗口中核对指纹并登录，使用时保持窗口打开；密码不会保存在 LocalFrame。</span>
         </div>
 
         <label class="field prompt-field">
@@ -618,6 +632,7 @@
     <div class="delete-dialog-actions"><button type="button" id="cancelVideoDelete">取消</button><button type="button" class="confirm-delete" id="confirmVideoDelete">确定删除</button></div>
   </dialog>
   <script src="/last-settings.js"></script>
+  <script src="/prompt-memory.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

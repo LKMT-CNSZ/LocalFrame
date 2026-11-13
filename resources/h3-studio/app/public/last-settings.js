@@ -33,7 +33,7 @@ const LastSettings = (() => {
       if (!anchor) return;
       const row = root.createElement('p'); row.className = 'hint';
       row.textContent = '自动记住本页上次参数；文件、密钥和费用确认需重新选择。 ';
-      const button = root.createElement('button'); button.type = 'button'; button.textContent = '清除本页记忆';
+      const button = root.createElement('button'); button.type = 'button'; button.textContent = '清除上次参数';
       button.addEventListener('click', () => { clear(); button.textContent = '已清除，下次打开使用默认参数'; });
       row.append(button); anchor.insertAdjacentElement('afterend', row);
     }

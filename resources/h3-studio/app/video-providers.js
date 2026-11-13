@@ -44,6 +44,10 @@ const PROVIDER_MODEL_CATALOG = Object.freeze({
 });
 
 const PROVIDER_PRESETS = Object.freeze({
+  'remote-h3': {
+    id: 'remote-h3', label: '云端 GPU · H3', kind: 'local', model: 'MiniMax H3 INT8',
+    capabilities: { textToVideo: true, imageToVideo: true, firstFrame: true, lastFrame: true, nativeAudio: true, remoteCancel: false, minDuration: 1, maxDuration: 900, durations: [], resolutions: ['960x544', '1152x640', '1344x768', '544x960', '640x1152', '768x1344'] },
+  },
   'local-h3-int8': {
     id: 'local-h3-int8', label: '本地 H3 高质量', kind: 'local', model: 'MiniMax H3 INT8',
     capabilities: { textToVideo: true, imageToVideo: true, firstFrame: true, lastFrame: true, nativeAudio: true, remoteCancel: true, minDuration: 1, maxDuration: 900, durations: [], resolutions: ['960x544', '1152x640', '1344x768', '544x960', '640x1152', '768x1344'] },

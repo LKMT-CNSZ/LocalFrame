@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const httpTransport = require('http');
 const httpsTransport = require('https');
 const { ComfyBackend, existsOver } = require('./comfy-backend');
+const { RemoteComfyBackend, tunnelUrl } = require('./remote-comfy-backend');
 const promptApi = require('./provider');
 const {
   PRESETS, SPECTRUM_MODES, inspectHardware, resolvePreset, buildQ2Args, publicPresets,
@@ -79,6 +80,20 @@ const PROMPT_PROVIDER_FILE = path.join(DATA_DIR, 'prompt-provider.json');
 const OPTIMIZATION_FILE = path.join(DATA_DIR, 'optimization.json');
 const VIDEO_PROVIDER_FILE = path.join(DATA_DIR, 'video-providers.json');
 const PENDING_VIDEO_JOBS_FILE = path.join(DATA_DIR, 'pending-video-jobs.json');
+const REMOTE_H3_CONFIG = path.join(DATA_DIR, 'remote-h3.json');
+function remoteH3Config() {
+  let value = {};
+  try { value = JSON.parse(fs.readFileSync(REMOTE_H3_CONFIG, 'utf8')); } catch {}
+  return { port: Number(value.port) || 18189, host: String(value.host || ''), sshPort: Number(value.sshPort) || 22, user: String(value.user || 'root') };
+}
+function validateRemoteH3Config(value) {
+  const config = { port: Number(value.port), host: String(value.host || '').trim(), sshPort: Number(value.sshPort), user: String(value.user || '').trim() };
+  tunnelUrl(config.port);
+  if (!/^[a-zA-Z0-9.-]{1,253}$/.test(config.host) || config.host.startsWith('-') || config.host.endsWith('.')) throw new Error('请输入有效的 SSH 主机名');
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/i.test(config.user)) throw new Error('SSH 用户名无效');
+  if (!Number.isInteger(config.sshPort) || config.sshPort < 1 || config.sshPort > 65535) throw new Error('SSH 端口无效');
+  return config;
+}
 const PENDING_PLATFORM_JOBS_FILE = path.join(DATA_DIR, 'pending-platform-jobs.json');
 const PLATFORM_HANDOFF_DIR = path.join(DATA_DIR, 'platform-handoff');
 const PLATFORM_INBOX_DIR = path.join(DATA_DIR, 'platform-inbox');
@@ -111,6 +126,7 @@ if (!fs.existsSync(PROMPT_PROVIDER_FILE)) {
 
 let history = loadHistory();
 let activeJob = null;
+let remoteComfy = null;
 let installJob = null;
 let optimizationPreferences = loadOptimizationPreferences();
 let hardwareCache = null;
@@ -164,6 +180,12 @@ const voice = new VoiceEngine({
   installer: VOICE_INSTALLER,
 });
 const videoProviders = new VideoProviderRegistry(videoProviderStore, {
+  'remote-h3': {
+    createTask: (body, preparedJob) => startInt8Generation(body, preparedJob, true),
+    getTask: () => publicJob(activeJob),
+    cancelTask: () => remoteComfy?.cancel(),
+    downloadResult: task => task?.outputPath || null,
+  },
   'local-h3-int8': {
     createTask: (body, preparedJob) => startInt8Generation(body, preparedJob),
     getTask: () => publicJob(activeJob),
@@ -594,7 +616,7 @@ function normalizeSettings(body) {
   const seed = body.randomSeed ? crypto.randomInt(0, 2147483647) : Number(body.seed);
   const requestedEngine = String(body.engine || 'int8');
   const externalEngine = REMOTE_PROVIDER_IDS.includes(requestedEngine) || PLATFORM_PROVIDER_IDS.includes(requestedEngine);
-  const engine = externalEngine ? requestedEngine : requestedEngine === 'q2' ? 'q2' : 'int8';
+  const engine = externalEngine ? requestedEngine : requestedEngine === 'q2' ? 'q2' : requestedEngine === 'remote-h3' ? 'remote-h3' : 'int8';
   const duration = Number(body.duration || (frames / 24));
   const outputWidth = Number(body.outputWidth || width);
   const outputHeight = Number(body.outputHeight || height);
@@ -613,7 +635,7 @@ function normalizeSettings(body) {
   if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) throw new Error('随机种子无效');
   if (body.lastImage && !body.firstImage) throw new Error('使用尾帧时必须同时提供首帧');
 
-  const storyboard = engine === 'int8' || PLATFORM_PROVIDER_IDS.includes(engine)
+  const storyboard = ['int8', 'remote-h3'].includes(engine) || PLATFORM_PROVIDER_IDS.includes(engine)
     ? normalizeStoryboard(body.storyboard, prompt, duration, body.shotSeconds, body.continuityMode)
     : [{ id: 1, seconds: duration, title: '单镜头预览', prompt }];
   const voiceSettings = voice.sanitizeSettings(body.voice || voice.loadSettings());
@@ -1098,6 +1120,7 @@ function readGpuState() {
 
 function ensureGenerationEngine(body) {
   if (activeJob && activeJob.status === 'running') throw new Error('已有任务正在处理或生成，请等待完成或先取消');
+  if (body.engine === 'remote-h3') return;
   if (imageStudio.busy && !REMOTE_PROVIDER_IDS.includes(body.engine) && !PLATFORM_PROVIDER_IDS.includes(body.engine)) throw new Error('本机图片正在生成，请等待完成');
   if (PLATFORM_PROVIDER_IDS.includes(body.engine)) return;
   if (REMOTE_PROVIDER_IDS.includes(body.engine)) {
@@ -1665,6 +1688,7 @@ function resumePendingPlatformJobs() {
 }
 
 function startGenerationPipeline(body) {
+  if (body.engine === 'remote-h3') { ensureGenerationEngine(body); return startGeneration(body); }
   if (PLATFORM_PROVIDER_IDS.includes(body.engine)) return startPlatformGeneration(body);
   if (REMOTE_PROVIDER_IDS.includes(body.engine)) return startCloudGeneration(body);
   const config = loadPromptProvider();
@@ -1853,12 +1877,21 @@ function updateSamplingProgressFromLog(job, text) {
   job.phase = `镜头 ${segment}/${segments} · 采样 ${step}/${steps}`;
 }
 
-function startInt8Generation(body, preparedJob = null) {
+function startInt8Generation(body, preparedJob = null, remote = false) {
   if (activeJob && activeJob.status === 'running' && activeJob !== preparedJob) throw new Error('已有任务正在生成，请等待完成或先取消');
-  if (!comfy.ready()) throw new Error('高质量 INT8 环境尚未完整安装，请在“环境与模型”中点击安装或继续下载');
-  const settings = normalizeSettings({ ...body, engine: 'int8' });
+  if (!remote && !comfy.ready()) throw new Error('高质量 INT8 环境尚未完整安装，请在“环境与模型”中点击安装或继续下载');
+  if (remote && (!existsOver(comfy.ffmpeg) || !existsOver(comfy.ffprobe))) throw new Error('云端生成的结果处理需要本机 FFmpeg 和 FFprobe');
+  const settings = normalizeSettings({ ...body, engine: remote ? 'remote-h3' : 'int8' });
+  let backend = comfy;
+  if (remote) {
+    const config = remoteH3Config();
+    tunnelUrl(config.port || 18189);
+    remoteComfy = new RemoteComfyBackend({ ...comfy, port: config.port || 18189, journalDir: path.join(DATA_DIR, 'remote-h3-jobs') });
+    backend = remoteComfy;
+  }
   const id = preparedJob?.id || `${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
   const recoveryId = crypto.createHash('sha256').update(JSON.stringify({
+    ...(remote ? { backend: 'remote-h3' } : {}),
     prompt: settings.prompt,
     storyboard: settings.storyboard,
     duration: settings.duration,
@@ -1875,7 +1908,7 @@ function startInt8Generation(body, preparedJob = null) {
   const lastImage = saveDataImage(body.lastImage, '尾帧', id);
   const job = preparedJob || {};
   Object.assign(job, {
-    id, status: 'running', engine: 'int8', phase: '启动 ComfyUI', progress: 8, logs: job.logs || [],
+    id, status: 'running', engine: remote ? 'remote-h3' : 'int8', phase: remote ? '检查云端 ComfyUI' : '启动 ComfyUI', progress: 8, logs: job.logs || [],
     firstImage, lastImage, recoveryId, startedAt: job.startedAt || Date.now(), optimization: resolvedOptimization.id, ...settings,
     projectId: String(body.projectId || job.projectId || '').replace(/[^a-zA-Z0-9-]/g, ''),
   });
@@ -1883,7 +1916,7 @@ function startInt8Generation(body, preparedJob = null) {
   activeJob = job;
   syncWorkflowJob(job);
 
-  comfy.runGeneration({ ...settings, firstImage, lastImage }, {
+  backend.runGeneration({ ...settings, firstImage, lastImage }, {
     jobId: id,
     recoveryId,
     outputDir: OUTPUT_DIR,
@@ -1910,7 +1943,7 @@ function startInt8Generation(body, preparedJob = null) {
     if (settings.upscale && ['realesrgan', 'flashvsr'].includes(settings.enhancement?.mode)) {
       job.phase = settings.enhancement.mode === 'flashvsr' ? '等待显存释放后进行扩散二次采样' : '等待显存释放后进行 AI 清晰修复';
       job.progress = Math.max(job.progress, 93);
-      await comfy.releaseModelsForPostprocess();
+      await backend.releaseModelsForPostprocess();
       outputPath = await qualityEnhancer.enhance(nativeOutputPath, settings, {
         onLog: (text) => appendJobLog(job, text),
         onProgress: (progress) => {
@@ -1928,7 +1961,9 @@ function startInt8Generation(body, preparedJob = null) {
     job.progress = 100;
   }).catch((error) => {
     job.finishedAt = Date.now();
-    if (job.cancelRequested || /已取消/.test(error.message)) {
+    if (remote && job.cancelRequested) {
+      job.status = 'paused'; job.phase = '本机已停止等待，云端任务可能仍在运行'; job.error = null;
+    } else if (job.cancelRequested || /已取消/.test(error.message)) {
       job.status = 'cancelled'; job.phase = '已取消'; job.error = null;
     } else if (/结束后安全暂停/.test(error.message)) {
       job.status = 'paused'; job.phase = error.message; job.error = null;
@@ -2587,12 +2622,34 @@ const server = http.createServer(async (req, res) => {
       const platformEngines = Object.fromEntries(PLATFORM_PROVIDER_IDS.map((id) => [id, true]));
       return gpuInfo((gpu) => sendJson(res, 200, {
         ready: comfy.ready() || q2Ready() || Object.values(cloudEngines).some(Boolean) || PLATFORM_PROVIDER_IDS.length > 0,
-        engines: { int8: comfy.ready(), q2: q2Ready(), ...cloudEngines, ...platformEngines },
+        engines: { int8: comfy.ready(), 'remote-h3': existsOver(comfy.ffmpeg) && existsOver(comfy.ffprobe), q2: q2Ready(), ...cloudEngines, ...platformEngines },
         gpu, root: ROOT_DIR, outputDir: OUTPUT_DIR,
         model: comfy.ready() ? 'MiniMax H3 Fused Turbo INT8 ConvRot' : 'MiniMax H3 Q2 兼容预览',
         hardware: optimization.hardware,
         optimization: { selected: optimization.selected, recommended: optimization.recommended, warnings: optimization.warnings },
       }));
+    }
+    if (url.pathname === '/api/remote-h3' && req.method === 'GET') {
+      return sendJson(res, 200, remoteH3Config());
+    }
+    if (url.pathname === '/api/remote-h3' && req.method === 'POST') {
+      if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return sendJson(res, 403, { error: '不允许跨站请求' });
+      if (activeJob?.status === 'running') return sendJson(res, 409, { error: '任务运行期间不能更改云端连接' });
+      const body = await readJson(req, 4096);
+      const config = validateRemoteH3Config(body);
+      fs.writeFileSync(REMOTE_H3_CONFIG, JSON.stringify(config), { mode: 0o600 });
+      return sendJson(res, 200, config);
+    }
+    if (url.pathname === '/api/remote-h3/connect' && req.method === 'POST') {
+      if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return sendJson(res, 403, { error: '不允许跨站请求' });
+      if (activeJob?.status === 'running') return sendJson(res, 409, { error: '任务运行期间不能更改连接' });
+      const config = validateRemoteH3Config(await readJson(req, 4096));
+      fs.writeFileSync(REMOTE_H3_CONFIG, JSON.stringify(config), { mode: 0o600 });
+      const args = ['-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=30', '-L', `127.0.0.1:${config.port}:127.0.0.1:8188`, '-p', String(config.sshPort), `${config.user}@${config.host}`];
+      const quoted = args.map(value => `'${value}'`).join(',');
+      const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Start-Process -FilePath ssh.exe -ArgumentList @(${quoted})`], { windowsHide: true, stdio: 'ignore' });
+      child.on('error', () => {});
+      return sendJson(res, 202, { message: 'SSH 窗口已请求打开；请核对主机指纹并在窗口中登录，保持窗口打开。' });
     }
     if (req.method === 'POST' && url.pathname === '/api/white-model/render') {
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) return sendJson(res, 415, { error: '需要 JSON 请求' });
@@ -2690,6 +2747,9 @@ const server = http.createServer(async (req, res) => {
         const result = await videoProviders.get(activeJob.providerId).cancelTask(activeJob.remoteTaskId, activeJob.remote || {});
         message = result.message;
         appendJobLog(activeJob, `[取消] ${message}`);
+      } else if (activeJob.engine === 'remote-h3') {
+        const result = await remoteComfy.cancel();
+        message = result.message;
       } else await videoProviders.get(activeJob.engine).cancelTask(activeJob.id);
       return sendJson(res, 200, { ok: true, message });
     }

@@ -6,6 +6,7 @@
   videoMemory.restore(['videoPrompt', 'videoStrength']);
   videoMemory.listen();
   videoMemory.notice(document.querySelector('.video-settings h2'));
+  const videoPrompts = PromptMemory.attach('localframe.prompts.whiteVideo.v1', ['videoPrompt'], $('videoPrompt').closest('label'));
   $('videoStrengthValue').textContent = $('videoStrength').value;
   async function models() {
     const response = await fetch('/api/local-image/models'); const data = await response.json();
@@ -44,6 +45,7 @@
       const params = new URLSearchParams({ model: $('videoModel').value, prompt: $('videoPrompt').value, strength: $('videoStrength').value });
       const response = await fetch(`/api/white-model/video?${params}`, { method: 'POST', headers: { 'Content-Type': 'video/mp4' }, body: file });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || '无法提交视频');
+      videoPrompts.remember({ videoPrompt: params.get('prompt') });
       await poll();
     } catch (error) { $('videoStatus').textContent = `未完成：${error.message}`; $('renderVideo').disabled = false; }
   });

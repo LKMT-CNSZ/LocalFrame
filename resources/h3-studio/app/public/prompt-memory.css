@@ -1,0 +1,11 @@
+.prompt-memory { margin: 10px 0 16px; padding: 12px; border: 1px solid #3b4946; border-radius: 10px; background: #172025; color: #e2eae3; font-size: 12px; }
+.prompt-memory button { padding: 7px 10px; border: 1px solid #4a5c50; border-radius: 7px; background: #202d27; color: #d8f0be; font: inherit; cursor: pointer; }
+.prompt-memory button:hover { border-color: #c7f27d; }
+.prompt-memory button:focus-visible, .prompt-memory summary:focus-visible { outline: 2px solid #c7f27d; outline-offset: 2px; }
+.prompt-memory details { margin: 10px 0 0; padding: 0; border: 0; }
+.prompt-memory summary { color: #f6a16b; cursor: pointer; font-size: 12px; }
+.prompt-memory-list { display: grid; gap: 7px; max-height: 250px; overflow-y: auto; margin: 10px 0; }
+.prompt-memory-entry { display: flex; align-items: start; gap: 6px; }
+.prompt-memory-entry .prompt-memory-apply { flex: 1; min-width: 0; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: #edf3ee; }
+.prompt-memory-entry > button:last-child { flex-shrink: 0; }
+.prompt-memory-status, .prompt-memory-list p { margin: 8px 0 0; color: #aabbb4; line-height: 1.6; font-size: 11px; }

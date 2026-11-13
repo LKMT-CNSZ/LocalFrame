@@ -163,7 +163,17 @@ test('provider settings route saves configuration and performs actual API calls'
   assert.equal(videoProviderDiscovery.models[0].verified, true);
   const videoProviderListResponse = await fetch(`${base}/api/video-providers`);
   const videoProviders = await videoProviderListResponse.json();
-  assert.equal(videoProviders.providers.length, 8);
+  assert.equal(videoProviders.providers.find((item) => item.id === 'remote-h3').model, 'MiniMax H3 INT8');
+  const badRemoteConfig = await fetch(`${base}/api/remote-h3`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host: 'host;not-a-command', sshPort: 22, port: 18189, user: 'root' }),
+  });
+  assert.notEqual(badRemoteConfig.status, 200);
+  const remoteConfig = { host: 'gpu.example.com', sshPort: 30179, port: 18189, user: 'root' };
+  const savedRemoteConfig = await fetch(`${base}/api/remote-h3`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(remoteConfig),
+  });
+  assert.equal(savedRemoteConfig.status, 200);
+  assert.deepEqual(await (await fetch(`${base}/api/remote-h3`)).json(), remoteConfig);
   assert.equal(videoProviders.providers.find((item) => item.id === 'kling-platform').configured, true);
   assert.equal(videoProviders.providers.find((item) => item.id === 'jimeng-platform').kind, 'platform');
   assert.equal(JSON.stringify(videoProviders).includes('video-integration-secret'), false);

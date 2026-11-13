@@ -1,6 +1,6 @@
 {
   "name": "local-frame-studio",
-  "version": "1.4.12",
+  "version": "1.4.14",
   "private": true,
   "author": "LocalFrame",
   "description": "本机与云端影像创作空间，整合图片、视频、三维预览与后期制作",

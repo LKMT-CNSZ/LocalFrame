@@ -153,6 +153,7 @@ const resolutionPresets = {
   'kling-platform': [['1280x720', '720p · 横屏'], ['720x1280', '720p · 竖屏'], ['1920x1080', '1080p · 横屏'], ['1080x1920', '1080p · 竖屏']],
   'jimeng-platform': [['1280x720', '720p · 横屏'], ['720x1280', '720p · 竖屏'], ['1920x1080', '1080p · 横屏'], ['1080x1920', '1080p · 竖屏']],
 };
+resolutionPresets['remote-h3'] = resolutionPresets.int8;
 
 function selectedVideoModel(provider, modelId = provider?.model) {
   return provider?.models?.find((item) => item.id === modelId) || null;
@@ -1375,6 +1376,13 @@ function updateEstimate() {
   const duration = Number(ui.duration.value);
   const frames = gridFrames(Math.min(10, duration));
   const steps = Number(ui.steps.value);
+  if (currentEngine === 'remote-h3') {
+    ui.estimate.querySelector('strong').textContent = '云端 GPU 生成';
+    ui.estimate.querySelector('span').textContent = '云端实例运行期间按平台规则计费；耗时取决于模型、尺寸与实际负载';
+    ui.estimate.classList.add('critical');
+    ui.resolutionNote.textContent = `${width} × ${height} · ${duration} 秒 · ${steps} 步；提示词与参考图会发送到你的云端实例。`;
+    return;
+  }
   if (cloudEngines.includes(currentEngine)) {
     const provider = videoProviderById(currentEngine);
     const cap = provider?.capabilities || {};
@@ -1418,6 +1426,7 @@ function updateEstimate() {
 
 function setEngine(engine) {
   currentEngine = engine;
+  $('remoteH3Connection').classList.toggle('hidden', engine !== 'remote-h3');
   const cloud = cloudEngines.includes(engine);
   const platform = platformEngines.includes(engine);
   const provider = videoProviderById(engine);
@@ -1427,7 +1436,7 @@ function setEngine(engine) {
   ui.resolution.replaceChildren(...availableResolutions.map(([value, label, nativeResolution]) => {
     const option = document.createElement('option'); option.value = value; option.textContent = label;
     if (nativeResolution) option.dataset.nativeResolution = nativeResolution;
-    if ((engine === 'int8' && value === '960x544') || (engine === 'q2' && value === '512x320') || (cloud && nativeResolution === provider?.nativeResolution && Number(value.split('x')[0]) > Number(value.split('x')[1]))) option.selected = true;
+    if ((['int8', 'remote-h3'].includes(engine) && value === (engine === 'remote-h3' ? '1344x768' : '960x544')) || (engine === 'q2' && value === '512x320') || (cloud && nativeResolution === provider?.nativeResolution && Number(value.split('x')[0]) > Number(value.split('x')[1]))) option.selected = true;
     return option;
   }));
   if (cloud && !ui.resolution.selectedOptions.length && ui.resolution.options.length) ui.resolution.options[0].selected = true;
@@ -1439,7 +1448,7 @@ function setEngine(engine) {
   if (engine === 'q2' && Number(ui.duration.value) > 10) ui.duration.value = '10';
   if (cloud && ui.duration.selectedOptions[0]?.disabled) ui.duration.value = String(capabilities.durations?.[0] || 5);
   ui.directorMode.disabled = engine === 'q2' || cloud;
-  ui.directorMode.checked = engine === 'int8';
+  ui.directorMode.checked = ['int8', 'remote-h3'].includes(engine);
   ui.directorCard.classList.toggle('off', engine === 'q2' || cloud);
   ui.buildStoryboard.disabled = engine === 'q2' || cloud;
   ui.steps.disabled = cloud;
@@ -1455,8 +1464,8 @@ function setEngine(engine) {
   ui.generate.disabled = ready === false;
   if (ui.videoProviderText) {
     ui.videoProviderCard.classList.toggle('ready', cloud ? Boolean(provider?.configured && provider?.enabled) : true);
-    ui.videoProviderText.textContent = platform ? `${provider?.label || engine} · 无需 API` : cloud ? `${provider?.label || engine} · ${provider?.model || '待配置'}` : `${engine === 'q2' ? '本地 H3 兼容预览' : '本地 H3 高质量'} · 素材不上传`;
-    ui.videoProviderState.textContent = platform ? '平台协作' : cloud ? (provider?.configured ? '已配置' : '待配置') : '本地';
+    ui.videoProviderText.textContent = engine === 'remote-h3' ? '云端 GPU · 提示词和参考图会发送到实例' : platform ? `${provider?.label || engine} · 无需 API` : cloud ? `${provider?.label || engine} · ${provider?.model || '待配置'}` : `${engine === 'q2' ? '本地 H3 兼容预览' : '本地 H3 高质量'} · 素材不上传`;
+    ui.videoProviderState.textContent = engine === 'remote-h3' ? '远程' : platform ? '平台协作' : cloud ? (provider?.configured ? '已配置' : '待配置') : '本地';
   }
   updateEstimate();
 }
@@ -1937,8 +1946,8 @@ async function generate() {
       return host === 'localhost' || host === '::1' || host === '0.0.0.0' || /^127(?:\.\d{1,3}){3}$/.test(host);
     } catch { return false; }
   })();
-  if (currentEngine === 'int8' && ui.directorMode.checked) {
-    if (!sameDeviceProvider && !storyboard.length) {
+  if (['int8', 'remote-h3'].includes(currentEngine) && ui.directorMode.checked) {
+    if ((!sameDeviceProvider || currentEngine === 'remote-h3') && !storyboard.length) {
       const built = await buildStoryboard(true, true);
       if (!built) { toast('无法建立导演分镜，请检查整片创意', true); return; }
     }
@@ -1971,7 +1980,7 @@ async function generate() {
     ? '\n\n平台账号与费用仍由官网管理。现在开始平台协作吗？'
     : cloudEngines.includes(currentEngine)
     ? '\n\nLocalFrame 无法代替厂商估算实际费用。确认创建云端任务吗？'
-    : '\n\n生成会长时间占用 GPU，建议接通电源并保持散热。\n\n仍然开始吗？';
+    : currentEngine === 'remote-h3' ? '\n\n确认开始云端生成吗？' : '\n\n生成会长时间占用 GPU，建议接通电源并保持散热。\n\n仍然开始吗？';
   if (warningItems.length && !window.confirm(`${warningItems.join('\n')}。${confirmTail}`)) return;
   const payload = {
     prompt, engine: currentEngine, width, height, outputWidth, outputHeight, upscale, duration, frames,
@@ -1981,8 +1990,8 @@ async function generate() {
     randomSeed: false,
     firstImage: imageData.first,
     lastImage: imageData.last,
-    storyboard: currentEngine === 'int8' && ui.directorMode.checked ? storyboard : null,
-    directorMode: currentEngine === 'int8' && ui.directorMode.checked,
+    storyboard: ['int8', 'remote-h3'].includes(currentEngine) && ui.directorMode.checked ? storyboard : null,
+    directorMode: ['int8', 'remote-h3'].includes(currentEngine) && ui.directorMode.checked,
     storyboardEdited,
     storyboardSource,
     promptOptimizedByAi,
@@ -1992,10 +2001,12 @@ async function generate() {
 
   ui.generate.disabled = true;
   try {
+    if (currentEngine === 'remote-h3') await fetchJson('/api/remote-h3', { method: 'POST', body: JSON.stringify(remoteH3Form()) });
     const data = await fetchJson('/api/generate', { method: 'POST', body: JSON.stringify(payload) });
+    quickPrompts.remember({ prompt });
     renderJob(data.job);
     startPolling();
-    toast(platformEngines.includes(currentEngine) ? '平台协作已启动；正常下载视频后会自动接回' : cloudEngines.includes(currentEngine) ? '云端任务已提交；可关闭后重新打开应用继续查看进度' : sameDeviceProvider ? '已启动显存保护：先处理文字与分镜，再载入视频模型' : '任务已开始，本地生成不会上传素材');
+    toast(currentEngine === 'remote-h3' ? '正在检查云端连接并准备任务' : platformEngines.includes(currentEngine) ? '平台协作已启动；正常下载视频后会自动接回' : cloudEngines.includes(currentEngine) ? '云端任务已提交；可关闭后重新打开应用继续查看进度' : sameDeviceProvider ? '已启动显存保护：先处理文字与分镜，再载入视频模型' : '任务已开始，本地生成不会上传素材');
   } catch (error) {
     toast(error.message, true);
     ui.generate.disabled = false;
@@ -2105,7 +2116,7 @@ async function loadSystem() {
       ? `${selectedVideoProvider?.label || currentEngine}可用`
       : cloudEngines.includes(currentEngine)
       ? (engineReady ? `${selectedVideoProvider?.label || currentEngine}已配置` : `${selectedVideoProvider?.label || currentEngine}待配置`)
-      : engineReady ? `${currentEngine === 'int8' ? 'INT8 高质量' : 'Q2 预览'}已就绪` : `${currentEngine === 'int8' ? 'INT8 环境待安装' : 'Q2 模型缺失'}`;
+      : currentEngine === 'remote-h3' ? (engineReady ? '云端连接待验证' : '本机视频工具缺失') : engineReady ? `${currentEngine === 'int8' ? 'INT8 高质量' : 'Q2 预览'}已就绪` : `${currentEngine === 'int8' ? 'INT8 环境待安装' : 'Q2 模型缺失'}`;
     if (lastJobStatus !== 'running') ui.generate.disabled = !engineReady;
     if (data.gpu) {
       ui.gpuName.textContent = data.gpu.name;
@@ -2356,6 +2367,12 @@ document.querySelectorAll('.engine-picker button').forEach((button) => button.ad
   persistVideoProviderSelection(button.dataset.engine);
   if (cloudEngines.includes(button.dataset.engine) && !videoProviderById(button.dataset.engine)?.configured) openVideoProviderModal();
 }));
+function remoteH3Form() { return { port: Number($('remoteH3Port').value), host: $('remoteH3Host').value, sshPort: Number($('remoteH3SshPort').value), user: $('remoteH3User').value }; }
+fetchJson('/api/remote-h3').then(config => { $('remoteH3Port').value = config.port; $('remoteH3Host').value = config.host; $('remoteH3SshPort').value = config.sshPort; $('remoteH3User').value = config.user; }).catch(() => {});
+$('remoteH3Connect').addEventListener('click', async () => {
+  try { const result = await fetchJson('/api/remote-h3/connect', { method: 'POST', body: JSON.stringify(remoteH3Form()) }); toast(result.message); }
+  catch (error) { toast(error.message, true); }
+});
 ui.randomizeSeed.addEventListener('click', () => { ui.seed.value = Math.floor(Math.random() * 2147483647); });
 ui.generate.addEventListener('click', generate);
 ui.cancel.addEventListener('click', cancel);
@@ -2485,15 +2502,17 @@ renderStoryboard();
 loadSystem();
 loadPromptProvider();
 const quickMemory = LastSettings.create('localframe.last.quick.v1', ['prompt', 'resolution', 'duration', 'steps', 'seed', 'enhancementMode', 'enhancementProfile']);
+quickMemory.restore();
+ui.prompt.dispatchEvent(new Event('input'));
 quickMemory.listen();
 quickMemory.notice(document.querySelector('.setting-tabs'));
+const quickPrompts = PromptMemory.attach('localframe.prompts.quick.v1', ['prompt'], document.querySelector('.prompt-field'));
 const postMemory = LastSettings.create('localframe.last.post.v1', ['editorFontSize', 'editorMargin', 'editorColor', 'editorBackground']);
 postMemory.restore();
 postMemory.listen();
 postMemory.notice(document.querySelector('.post-workspace .post-panel-head'));
 Promise.allSettled([loadVideoProviders(true), loadOptimization(true)]).then(() => {
-  quickMemory.restore();
-  ui.prompt.dispatchEvent(new Event('input'));
+  quickMemory.restore(['resolution', 'duration', 'steps', 'seed', 'enhancementMode', 'enhancementProfile']);
   updateEnhancementNote(); updateEstimate();
 });
 loadEnvironment();

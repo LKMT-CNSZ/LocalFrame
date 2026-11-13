@@ -155,6 +155,7 @@ async function aiRender() {
   try {
     const response = await fetch('/api/white-model/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const result = await response.json(); if (!response.ok) throw new Error(result.error || 'AI 渲染失败');
+    modelPrompts.remember({ prompt: payload.prompt });
     $('resultImage').src = result.image; $('download').href = result.image; $('result').hidden = false;
     $('resultInfo').textContent = `模型 ${payload.model} · 原生输出 ${result.width} × ${result.height} · 基于点击生成时的视角，后续修改白模不会自动更新此图`;
     status('AI 效果图已返回。请检查结构与细节；原始白模未修改。');
@@ -164,6 +165,7 @@ const modelMemory = LastSettings.create('localframe.last.whiteModel.v1', ['mater
 modelMemory.restore();
 modelMemory.listen();
 modelMemory.notice(document.querySelector('.settings .muted'));
+const modelPrompts = PromptMemory.attach('localframe.prompts.whiteModel.v1', ['prompt'], $('prompt').closest('label'));
 function guarded(fn) { return (...args) => Promise.resolve().then(() => fn(...args)).catch(error => status(`未完成：${error.message}`)); }
 $('files').addEventListener('change', guarded(e => importFiles(e.target.files)));
 $('demo').addEventListener('click', guarded(demo));

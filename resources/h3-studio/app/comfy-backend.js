@@ -19,6 +19,7 @@ function requestJson(baseUrl, pathname, options = {}) {
     const request = http.request(new URL(pathname, baseUrl), {
       method: options.method || 'GET',
       timeout: options.timeout || 15000,
+      agent: options.freshConnection ? false : undefined,
       headers: body ? { 'Content-Type': 'application/json', 'Content-Length': body.length } : {},
     }, (response) => {
       const chunks = [];
@@ -696,7 +697,7 @@ class ComfyBackend {
   async runGeneration(settings, hooks = {}) {
     this.cancelRequested = false;
     await this.ensureServer(hooks.onLog, { mode: 'basic' });
-    hooks.onLog?.(this.shouldUseW4a8()
+    hooks.onLog?.(this.remoteMode ? '[云端模型] 使用远端 H3 INT8 / 32B NVFP4 组件集\n' : this.shouldUseW4a8()
       ? '[低显存加速] 已启用 H3 Lite W4A8 + 4B FP8 + ClipProj + Turbo 4 步组件集\n'
       : '[本地模型] 使用原有 H3 INT8 / 32B NVFP4 组件集\n');
     const shotDir = path.join(hooks.outputDir, '.segments', hooks.recoveryId || hooks.jobId);
@@ -778,9 +779,9 @@ class ComfyBackend {
                 });
               },
               hooks.onLog,
-              { maxWaitMs: 4 * 60 * 60 * 1000 },
+              { maxWaitMs: 4 * 60 * 60 * 1000, journalKey: `${hooks.recoveryId || hooks.jobId}-shot-${number}` },
             );
-            const source = this.resolveComfyOutput(media);
+            const source = await this.resolveComfyOutput(media, shotDir);
             const renderSettings = { ...settings, width: render.width, height: render.height };
             await this.validateShot(source, renderSettings, shot.seconds);
             shotFile = path.join(shotDir, `shot-${String(number).padStart(2, '0')}.mp4`);
@@ -794,7 +795,7 @@ class ComfyBackend {
             break;
           } catch (error) {
             lastError = error;
-            if (this.cancelRequested || /已取消/.test(error.message)) throw error;
+            if (this.remoteMode || this.cancelRequested || error.noRetry || /已取消/.test(error.message)) throw error;
             const failure = classifyComfyFailure(error);
             hooks.onLog?.(`[恢复] 镜头 ${number} 第 ${attempt}/${retryPlans.length} 次未完成（${failure.label}）：${error.message}\n`);
             if (attempt < retryPlans.length) {
@@ -926,5 +927,5 @@ class ComfyBackend {
 }
 
 module.exports = {
-  ComfyBackend, existsOver, fitDimensions, buildShotRetryPlans, parseSamplingProgress, classifyComfyFailure, summarizeComfyError, probeTcp,
+  ComfyBackend, existsOver, fitDimensions, buildShotRetryPlans, parseSamplingProgress, classifyComfyFailure, summarizeComfyError, probeTcp, requestJson, collectMedia,
 };

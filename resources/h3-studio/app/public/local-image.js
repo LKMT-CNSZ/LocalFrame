@@ -316,6 +316,7 @@ const imageMemory = LastSettings.create('localframe.last.image.v1', ['engine', '
 imageMemory.restore(['engine', 'prompt', 'negative', 'size', 'steps', 'apiBaseUrl', 'apiModel']);
 imageMemory.listen();
 imageMemory.notice(document.querySelector('.image-settings .muted'));
+const imagePrompts = PromptMemory.attach('localframe.prompts.image.v1', ['prompt', 'negative'], document.querySelector('.prompt-actions'));
 $('clearPrompts').addEventListener('click', () => {
   for (const id of ['prompt', 'negative']) {
     const field = $(id);
@@ -368,6 +369,7 @@ $('downloadModel').addEventListener('click', async () => {
 });
 $('generate').addEventListener('click', async () => {
   const engine = $('engine').value;
+  const prompts = imagePrompts.capture();
   firstJobPoll = false;
   shownResultId = '';
   renderJob({ status: 'running', engine, phase: '正在提交任务', step: 0, total: 0, startedAt: Date.now() });
@@ -377,6 +379,7 @@ $('generate').addEventListener('click', async () => {
       : { engine, model: $('model').value, variant: $('variant').value, prompt: $('prompt').value, negative: $('negative').value, width, height, steps: Number($('steps').value) };
     const route = engine === 'api' ? '/api/local-image/api/generate' : '/api/local-image/generate';
     const data = await json(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    imagePrompts.remember(prompts);
     renderJob(data.job);
     await pollJob();
   } catch (error) {
